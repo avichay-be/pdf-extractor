@@ -1,0 +1,91 @@
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'prod'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      location:
+        description: 'Azure region'
+        required: true
+        default: 'eastus'
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/**'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: rg-michman-pdf-${{ github.event.inputs.environment || 'prod' }}
+
+jobs:
+  deploy-infrastructure:
+    name: Deploy Azure Infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'prod' }}
+
+    outputs:
+      containerRegistryName: ${{ steps.deploy.outputs.containerRegistryName }}
+      containerRegistryLoginServer: ${{ steps.deploy.outputs.containerRegistryLoginServer }}
+      containerAppUrl: ${{ steps.deploy.outputs.containerAppUrl }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create Resource Group
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az group create \
+              --name ${{ env.RESOURCE_GROUP }} \
+              --location ${{ github.event.inputs.location || 'eastus' }} \
+              --tags environment=${{ github.event.inputs.environment || 'prod' }} application=michman-pdf-extractor
+
+      - name: Deploy Bicep Template
+        id: deploy
+        uses: azure/arm-deploy@v2
+        with:
+          resourceGroupName: ${{ env.RESOURCE_GROUP }}
+          template: ./infra/main.bicep
+          parameters: >
+            environmentName=${{ github.event.inputs.environment || 'prod' }}
+            azureApiKey=${{ secrets.AZURE_API_KEY }}
+            azureOpenAiApiKey=${{ secrets.AZURE_OPENAI_API_KEY }}
+            azureDocumentIntelligenceKey=${{ secrets.AZURE_DOCUMENT_INTELLIGENCE_KEY }}
+            geminiApiKey=${{ secrets.GEMINI_API_KEY }}
+            apiKey=${{ secrets.API_KEY }}
+            mistralApiUrl=${{ vars.MISTRAL_API_URL }}
+            azureOpenAiApiUrl=${{ vars.AZURE_OPENAI_API_URL }}
+            azureDocumentIntelligenceEndpoint=${{ vars.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT }}
+          failOnStdErr: false
+
+      - name: Output Deployment Results
+        run: |
+          echo "## Infrastructure Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Resource | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Container Registry | ${{ steps.deploy.outputs.containerRegistryName }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Registry Server | ${{ steps.deploy.outputs.containerRegistryLoginServer }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container App URL | ${{ steps.deploy.outputs.containerAppUrl }} |" >> $GITHUB_STEP_SUMMARY
