@@ -1,0 +1,48 @@
+Michman PDF Extractor - Complete File List
+===========================================
+
+CORE APPLICATION FILES
+----------------------
+main.py                    # FastAPI application with 3 endpoints
+config.py                  # Pydantic settings from environment
+run.py                     # Development server launcher
+
+SERVICES (Business Logic)
+-------------------------
+services/__init__.py
+services/pdf_processor.py      # PDF splitting & markdown combining (250 lines)
+services/mistral_client.py     # Azure Mistral API client (150 lines)
+
+MODELS (Data Validation)
+------------------------
+models/__init__.py
+models/mistral_models.py       # 5 Pydantic models for API (200 lines)
+
+TESTS (Unit Tests)
+------------------
+tests/__init__.py
+tests/test_pdf_processor.py    # 15+ tests for PDF processing
+tests/test_mistral_client.py   # 10+ tests for API client
+tests/test_models.py           # 20+ tests for data models
+
+CONFIGURATION FILES
+-------------------
+.env.example               # Environment variables template
+.gitignore                 # Git ignore patterns
+pytest.ini                 # Pytest configuration
+requirements.txt           # Production dependencies (8 packages)
+requirements-dev.txt       # Development dependencies (11 packages)
+
+DOCUMENTATION FILES
+-------------------
+README.md                  # Complete documentation (350 lines)
+QUICKSTART.md             # 5-minute setup guide
+ARCHITECTURE.md           # System design & flow diagrams (400 lines)
+claude.md                 # Function map for development (500 lines)
+PROJECT_OVERVIEW.md       # High-level project overview
+
+UTILITIES
+---------
+example_client.py         # Example usage script with CLI
+
+TOTAL: 24 files

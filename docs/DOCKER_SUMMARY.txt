@@ -1,0 +1,74 @@
+Docker Files Summary for Michman PDF Extractor
+==============================================
+
+DOCKER FILES CREATED
+-------------------
+✅ Dockerfile                    - Development Docker image (~300MB)
+✅ Dockerfile.prod               - Production Docker image (~250MB, hardened)
+✅ docker-compose.yml            - Development environment
+✅ docker-compose.prod.yml       - Production with Nginx reverse proxy
+✅ .dockerignore                 - Optimize build context
+✅ nginx.conf                    - Nginx configuration with rate limiting
+✅ Makefile                      - Easy command shortcuts
+✅ DOCKER.md                     - Complete Docker documentation (800+ lines)
+
+QUICK START COMMANDS
+--------------------
+Development:
+  make dev                       # Start development environment
+  make logs                      # View logs
+  make stop                      # Stop containers
+  
+Production:
+  make prod                      # Start with Nginx
+  make prod-logs                 # View production logs
+  make prod-stop                 # Stop production
+  
+Utilities:
+  make help                      # Show all commands
+  make health                    # Check API health
+  make clean                     # Remove containers/images
+
+DOCKER FEATURES
+---------------
+✅ Multi-stage builds (smaller images)
+✅ Non-root user (security)
+✅ Health checks (reliability)
+✅ Resource limits (stability)
+✅ Auto-restart (availability)
+✅ Log rotation (maintenance)
+✅ Rate limiting via Nginx (protection)
+✅ 4 worker processes (performance)
+✅ Proper signal handling with tini
+
+DEPLOYMENT OPTIONS
+------------------
+1. Development: docker-compose up -d
+2. Production:  docker-compose -f docker-compose.prod.yml up -d
+3. Quick:       make dev  (or make prod)
+4. Custom:      docker build -f Dockerfile.prod -t michman:prod .
+
+ARCHITECTURE
+------------
+[Client] → [Nginx:80] → [FastAPI:8000] → [Mistral API]
+            Rate Limit    4 Workers         Azure
+            SSL Ready     Load Balance      OCR
+
+DOCUMENTATION
+-------------
+📖 DOCKER.md - Complete guide with:
+   - Quick Start (5 min setup)
+   - Development Setup
+   - Production Setup
+   - Configuration
+   - Monitoring & Logging
+   - Troubleshooting
+   - Security Best Practices
+   - Performance Tuning
+
+NEXT STEPS
+----------
+1. Ensure .env file has AZURE_API_KEY
+2. Run: make dev
+3. Test: curl http://localhost:8000/health
+4. Read: DOCKER.md for full documentation

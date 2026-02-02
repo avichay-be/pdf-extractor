@@ -1,0 +1,5 @@
+# Ignore all PDF files (user-provided test data)
+*.pdf
+
+# Keep the README
+!README.md
