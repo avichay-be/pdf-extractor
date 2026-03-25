@@ -7,7 +7,12 @@ import fitz  # PyMuPDF
 
 from src.core.config import settings
 from src.core.constants import MARKDOWN_SECTION_SEPARATOR
-from src.core.utils import encode_chunks_to_base64_async, combine_markdown_sections, format_page_header
+from src.core.utils import (
+    encode_chunks_to_base64_async,
+    combine_markdown_sections,
+    format_page_header,
+    normalize_hebrew_text,
+)
 from src.services.client_factory import get_client_factory
 
 logger = logging.getLogger(__name__)
@@ -29,7 +34,7 @@ def extract_text_from_pdf(pdf_path: str) -> tuple[str, dict]:
 
     Strictly extracts tabular data using pdfplumber.
     Does not perform OCR or extract non-tabular text.
-    Applies bidirectional text correction for proper Hebrew/Arabic display.
+    Preserves extracted text in logical reading order as returned by the PDF.
 
     Args:
         pdf_path: Path to PDF file
@@ -45,16 +50,6 @@ def extract_text_from_pdf(pdf_path: str) -> tuple[str, dict]:
     try:
         import pdfplumber
         import pandas as pd
-        from bidi import get_display
-        
-        def fix_bidi_text(text: str) -> str:
-            """Apply bidirectional text correction for RTL languages (Hebrew/Arabic)."""
-            if not text or not isinstance(text, str):
-                return text
-            try:
-                return get_display(text)
-            except Exception:
-                return text
         
         markdown_parts = []
         markdown_parts.append(f"# Extracted Tables\n\n")
@@ -78,11 +73,13 @@ def extract_text_from_pdf(pdf_path: str) -> tuple[str, dict]:
                             df = pd.DataFrame(table_data[1:], columns=table_data[0])
                         else:
                             df = pd.DataFrame(table_data)
-                        
-                        # Apply bidirectional text correction to all cells (and headers)
-                        df = df.map(fix_bidi_text)
-                        df.columns = [fix_bidi_text(col) if isinstance(col, str) else col for col in df.columns]
-                        
+
+                        df = df.map(normalize_hebrew_text)
+                        df.columns = [
+                            normalize_hebrew_text(col) if isinstance(col, str) else col
+                            for col in df.columns
+                        ]
+
                         # Convert to markdown "as is"
                         markdown_table = df.to_markdown(index=False)
 
@@ -333,7 +330,7 @@ async def process_with_model(
                 # Validate using the specified validator
                 validation_report = await validation_service.cross_validate_pages(
                     mock_response,
-                    chunk_path,
+                    pdf_bytes,
                     has_query=has_query
                 )
 

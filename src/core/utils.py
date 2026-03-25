@@ -1,12 +1,15 @@
 import base64
 import asyncio
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple
 
 from src.core.constants import MARKDOWN_SECTION_SEPARATOR, MARKDOWN_PAGE_HEADER_TEMPLATE
 
 logger = logging.getLogger(__name__)
+
+HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF]")
 
 def filter_outlines_by_query(outline_info: list, query: str) -> list:
     """
@@ -30,6 +33,24 @@ def filter_outlines_by_query(outline_info: list, query: str) -> list:
 
     # If no matches found, return all outlines (fallback)
     return filtered if filtered else outline_info
+
+
+def normalize_hebrew_text(text: str) -> str:
+    """
+    Normalize Hebrew strings from visual order to logical reading order.
+
+    pdfplumber commonly returns Hebrew in visual RTL order. Converting with
+    `bidi.get_display` restores logical text order for markdown/API output.
+    """
+    if not text or not isinstance(text, str) or not HEBREW_CHAR_RE.search(text):
+        return text
+
+    try:
+        from bidi import get_display
+    except Exception:
+        return text
+
+    return get_display(text)
 
 
 def _encode_single_chunk(chunk_path: str) -> Tuple[str, str]:

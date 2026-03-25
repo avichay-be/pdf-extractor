@@ -3,6 +3,8 @@ from pathlib import Path
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table
 from src.services.extraction_service import extract_text_from_pdf
+import pandas as pd
+from src.core.utils import normalize_hebrew_text
 
 def create_table_pdf(path):
     doc = SimpleDocTemplate(str(path), pagesize=A4)
@@ -41,3 +43,27 @@ def test_extract_text_from_pdf_pdfplumber(sample_pdf_with_table):
     else:
         print("pdfplumber did not detect the table in this synthetic PDF.")
         assert "No tables were detected" in content
+
+
+def test_pandas_markdown_preserves_logical_hebrew_order():
+    df = pd.DataFrame(
+        [["סריקת תעודת זהות", "Entra ID (B2C)"]],
+        columns=["תהליך", "מערכת"]
+    )
+
+    markdown = df.to_markdown(index=False)
+
+    assert "סריקת תעודת זהות" in markdown
+    assert "תוהז תדועת תקירס" not in markdown
+
+
+def test_normalize_hebrew_text_fixes_visual_order_hebrew():
+    assert normalize_hebrew_text("תוהז תדועת תקירס") == "סריקת תעודת זהות"
+
+
+def test_normalize_hebrew_text_fixes_mixed_visual_order_text():
+    value = "םיאלמ םיילטיגיד ComSign / DocuSign"
+    normalized = normalize_hebrew_text(value)
+
+    assert normalized == "ComSign / DocuSign דיגיטליים מלאים"
+    assert "םיאלמ םיילטיגיד" not in normalized

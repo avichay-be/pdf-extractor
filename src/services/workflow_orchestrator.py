@@ -4,6 +4,7 @@ Workflow orchestrator for PDF extraction.
 Routes extraction requests to appropriate workflow handlers based on query patterns.
 Provides a single entry point for all extraction workflows.
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -14,7 +15,9 @@ from src.services.workflows.azure_di_handler import AzureDIHandler
 from src.services.workflows.ocr_images_handler import OcrImagesHandler
 from src.services.workflows.gemini_handler import GeminiHandler
 from src.services.workflows.default_handler import DefaultHandler
+from src.services.workflows.smart_extraction_handler import SmartExtractionHandler
 from src.models.workflow_models import WorkflowResult
+from src.core.config import settings
 from src.core.error_handling import WorkflowExecutionError
 
 logger = logging.getLogger(__name__)
@@ -41,6 +44,7 @@ class WorkflowOrchestrator:
             WorkflowType.MISTRAL: DefaultHandler(),
             WorkflowType.OPENAI: DefaultHandler(),  # Uses same handler as Mistral
             WorkflowType.GEMINI: GeminiHandler(),  # Maps to same as GEMINI_WF
+            WorkflowType.SMART_EXTRACTION: SmartExtractionHandler(),
         }
 
         logger.info("Workflow orchestrator initialized with all handlers")
@@ -70,6 +74,24 @@ class WorkflowOrchestrator:
         """
         # Determine workflow type from query
         workflow_type = get_workflow_for_query(query)
+
+        # Auto-detect mixed content and redirect to smart extraction
+        if workflow_type == WorkflowType.MISTRAL and settings.SMART_EXTRACTION_AUTO_DETECT:
+            try:
+                from src.services.page_analyzer import PageAnalyzer
+                analyzer = PageAnalyzer()
+                is_mixed = await asyncio.to_thread(analyzer.quick_is_mixed, pdf_path)
+                if is_mixed:
+                    logger.info(
+                        "Mixed content detected, auto-routing to Smart Extraction"
+                    )
+                    workflow_type = WorkflowType.SMART_EXTRACTION
+                else:
+                    logger.info(
+                        "Auto-detect: PDF is not mixed content, continuing with default workflow"
+                    )
+            except Exception as e:
+                logger.warning(f"Smart extraction auto-detect failed, using default: {e}")
 
         logger.info(
             f"Orchestrating workflow: type={workflow_type}, "

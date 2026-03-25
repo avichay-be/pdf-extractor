@@ -149,6 +149,16 @@ class ValidationService:
         """Delegate to similarity calculator."""
         return self.similarity_calculator.calculate_similarity_levenshtein(content1, content2)
 
+    # Backward-compatible wrappers kept for older tests/scripts that still
+    # call the pre-refactor private helpers directly.
+    def _extract_numbers(self, text: str) -> List[str]:
+        """Delegate to content normalizer."""
+        return self.normalizer.extract_numbers(text)
+
+    def _normalize_for_comparison(self, text: str) -> str:
+        """Delegate to content normalizer."""
+        return self.normalizer.normalize_for_comparison(text)
+
     # ============================================================================
     # VALIDATION ORCHESTRATION
     # ============================================================================
@@ -404,6 +414,12 @@ class ValidationService:
                 pages_to_validate.append((page_index, page_content, reason, detected_problems, custom_system, custom_user))
 
         # Second pass: Validate all pages in parallel
+        if not pages_to_validate and has_query and settings.VALIDATION_SKIP_SAMPLE_IF_CLEAN:
+            logger.info(
+                "Cross-validation queued 0 pages: no problem patterns were found and "
+                "VALIDATION_SKIP_SAMPLE_IF_CLEAN=True, so clean sample pages were skipped"
+            )
+
         logger.info(f"Validating {len(pages_to_validate)} pages in parallel...")
 
         validation_tasks = [

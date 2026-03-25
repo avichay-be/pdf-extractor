@@ -15,6 +15,7 @@ class WorkflowType(Enum):
     GEMINI = "gemini"
     GEMINI_WF = "gemini-wf"
     OCR_WITH_IMAGES = "ocr_with_images"
+    SMART_EXTRACTION = "smart_extraction"
 
     def __str__(self) -> str:
         """Return string value of the workflow type."""
@@ -29,5 +30,6 @@ WORKFLOW_NAMES = {
     WorkflowType.OPENAI: "OpenAI Vision",
     WorkflowType.GEMINI: "Google Gemini",
     WorkflowType.GEMINI_WF: "Google Gemini Page-by-Page",
-    WorkflowType.OCR_WITH_IMAGES: "OCR with Images (Mistral + OpenAI)"
+    WorkflowType.OCR_WITH_IMAGES: "OCR with Images (Mistral + OpenAI)",
+    WorkflowType.SMART_EXTRACTION: "Smart Extraction (Per-Page Routing)"
 }

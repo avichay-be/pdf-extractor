@@ -68,6 +68,7 @@ class Settings(BaseSettings):
         "05_Esna": "azure_document_intelligence",
         "ocr with images": "ocr_with_images",
         "gemini-wf": "gemini-wf",  # Gemini page-by-page async processing
+        "smart": "smart_extraction",  # Smart per-page extraction
         # Default fallback
         "default": "mistral"
     }
@@ -82,6 +83,15 @@ class Settings(BaseSettings):
     # NOTE: Gemini validation support has been removed. Only OpenAI is supported for cross-validation.
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: str = "gemini-2.5-flash"  # Gemini Flash Lite
+
+    # Smart Extraction Configuration
+    SMART_EXTRACTION_AUTO_DETECT: bool = True  # Auto-detect mixed PDFs and route to smart extraction
+    SMART_EXTRACTION_TEXT_THRESHOLD: int = 50  # Min chars to consider a page as having text
+    SMART_EXTRACTION_MISTRAL_BATCH_SIZE: int = 10  # Max consecutive image pages per Mistral call
+    SMART_EXTRACTION_POLISH_ENABLED: bool = True  # Enable Gemini polish pass
+    SMART_EXTRACTION_POLISH_BATCH_SIZE: int = 5  # Pages per Gemini polish call
+    SMART_EXTRACTION_POLISH_CONCURRENCY: int = 3  # Max parallel Gemini polish calls
+    SMART_EXTRACTION_POLISH_PROMPT: Optional[str] = None  # Custom polish prompt (None = use default)
 
     # Cross-Validation Settings
     ENABLE_CROSS_VALIDATION: bool = True

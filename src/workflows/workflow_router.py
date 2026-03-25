@@ -119,6 +119,7 @@ def _string_to_workflow_type(workflow_str: str) -> WorkflowType:
         "gemini": WorkflowType.GEMINI,
         "gemini-wf": WorkflowType.GEMINI_WF,
         "ocr_with_images": WorkflowType.OCR_WITH_IMAGES,
+        "smart_extraction": WorkflowType.SMART_EXTRACTION,
     }
 
     workflow_type = workflow_map.get(workflow_str.lower())
