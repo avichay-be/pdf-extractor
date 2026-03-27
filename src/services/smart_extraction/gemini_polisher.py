@@ -11,24 +11,11 @@ from typing import Optional
 
 from src.core.config import settings
 from src.core.utils import combine_markdown_sections
+from src.services.gemini_client import GeminiDocumentClient
 from src.services.smart_extraction.extraction_router import PageExtractionResult
 from src.services.validation.content_normalizer import ContentNormalizer
-from src.services.client_factory import get_client_factory
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_POLISH_PROMPT = """You are a document formatting expert. Clean up extracted PDF content into well-formatted markdown optimized for LLM consumption.
-
-RULES:
-1. Fix OCR errors (common: 0/O, 1/l, rn/m, Hebrew character confusions)
-2. Normalize table formatting (consistent columns, proper alignment)
-3. Ensure consistent heading hierarchy (H2 for sections, H3 for subsections)
-4. Remove duplicate content at page boundaries
-5. Fix encoding artifacts and garbled characters
-6. Preserve ALL numerical data EXACTLY as-is (never modify numbers)
-7. Preserve ALL text content (never summarize or omit)
-8. Clean up excessive whitespace
-9. Output ONLY the cleaned markdown - no explanations"""
 
 # Maximum divergence in number frequency before rejecting polish
 MAX_NUMBER_DIVERGENCE = 0.05
@@ -37,14 +24,17 @@ MAX_NUMBER_DIVERGENCE = 0.05
 class GeminiPolisher:
     """Polishes extracted markdown using Gemini for OCR error correction."""
 
-    def __init__(self):
+    def __init__(self, gemini_client: Optional[GeminiDocumentClient] = None):
+        self._gemini_client = gemini_client
         self._normalizer = ContentNormalizer()
         self._batch_size = settings.SMART_EXTRACTION_POLISH_BATCH_SIZE
         self._concurrency = settings.SMART_EXTRACTION_POLISH_CONCURRENCY
+        self._model_name = settings.SMART_EXTRACTION_POLISH_MODEL or settings.GEMINI_MODEL
 
     async def polish(
         self,
-        page_results: list[PageExtractionResult]
+        page_results: list[PageExtractionResult],
+        enabled: Optional[bool] = None,
     ) -> str:
         """
         Polish extracted page content through Gemini.
@@ -59,51 +49,124 @@ class GeminiPolisher:
         Returns:
             Combined polished markdown string
         """
-        if not settings.SMART_EXTRACTION_POLISH_ENABLED:
+        should_polish = (
+            enabled
+            if enabled is not None
+            else settings.SMART_EXTRACTION_POLISH_ENABLED
+        )
+
+        if not should_polish:
             logger.info("Gemini polish disabled, returning raw content")
             return self._combine_results(page_results)
 
-        gemini_client = get_client_factory().gemini_client
-        if gemini_client is None:
+        if not self._needs_polish(page_results):
+            logger.info("Gemini polish skipped, content is already digital/table-clean")
+            return self._combine_results(page_results)
+
+        if self._gemini_client is None:
             logger.warning("Gemini client unavailable, skipping polish")
             return self._combine_results(page_results)
 
-        # Build page content strings with headers
-        page_contents = []
-        for result in page_results:
-            header = f"## Page {result.page_number + 1}\n\n"
-            page_contents.append(header + result.content)
+        polishable_segments = self._collect_polishable_segments(page_results)
+        if not polishable_segments:
+            logger.info("Gemini polish skipped, no OCR-derived results were found")
+            return self._combine_results(page_results)
 
-        # Batch pages
+        polishable_count = sum(len(segment) for segment in polishable_segments)
+        batch_count = sum(
+            (len(segment) + self._batch_size - 1) // self._batch_size
+            for segment in polishable_segments
+        )
+
+        logger.info(
+            f"Polishing {polishable_count} OCR-derived results across "
+            f"{len(polishable_segments)} segments in {batch_count} batches "
+            f"(batch_size={self._batch_size}, concurrency={self._concurrency}, "
+            f"model={self._model_name})"
+        )
+
+        combined_parts: list[str] = []
+        current_segment: list[PageExtractionResult] = []
+
+        for result in page_results:
+            if self._should_polish_result(result):
+                current_segment.append(result)
+                continue
+
+            if current_segment:
+                combined_parts.append(await self._polish_segment(current_segment))
+                current_segment = []
+
+            combined_parts.append(self._render_result(result))
+
+        if current_segment:
+            combined_parts.append(await self._polish_segment(current_segment))
+
+        return combine_markdown_sections(
+            [part for part in combined_parts if part],
+            empty_message=""
+        )
+
+    def _needs_polish(self, page_results: list[PageExtractionResult]) -> bool:
+        """Return True when the document likely benefits from Gemini cleanup."""
+        return any(self._should_polish_result(result) for result in page_results)
+
+    def _collect_polishable_segments(
+        self,
+        page_results: list[PageExtractionResult],
+    ) -> list[list[PageExtractionResult]]:
+        """Return contiguous OCR-derived segments that should be polished."""
+        segments: list[list[PageExtractionResult]] = []
+        current_segment: list[PageExtractionResult] = []
+
+        for result in page_results:
+            if self._should_polish_result(result):
+                current_segment.append(result)
+                continue
+
+            if current_segment:
+                segments.append(current_segment)
+                current_segment = []
+
+        if current_segment:
+            segments.append(current_segment)
+
+        return segments
+
+    def _should_polish_result(self, result: PageExtractionResult) -> bool:
+        """Return True when a result comes from OCR-derived extraction."""
+        if result.source in {"mistral", "gemini", "merged"}:
+            return True
+        if result.strategy == "ocr" and result.source != "pdfplumber":
+            return True
+        return False
+
+    async def _polish_segment(
+        self,
+        segment_results: list[PageExtractionResult],
+    ) -> str:
+        """Polish a contiguous OCR-only segment while keeping its internal order."""
+        page_contents = [self._render_result(result) for result in segment_results]
         batches = [
             page_contents[i:i + self._batch_size]
             for i in range(0, len(page_contents), self._batch_size)
         ]
 
-        logger.info(
-            f"Polishing {len(page_contents)} pages in {len(batches)} batches "
-            f"(batch_size={self._batch_size}, concurrency={self._concurrency})"
-        )
-
-        # Process batches with concurrency limit
         semaphore = asyncio.Semaphore(self._concurrency)
-        polish_prompt = settings.SMART_EXTRACTION_POLISH_PROMPT or DEFAULT_POLISH_PROMPT
+        polish_prompt = settings.get_smart_extraction_polish_prompt()
 
         async def process_batch(batch: list[str], batch_idx: int) -> str:
             async with semaphore:
                 return await self._polish_batch(
-                    gemini_client, batch, polish_prompt, batch_idx
+                    self._gemini_client, batch, polish_prompt, batch_idx
                 )
 
-        tasks = [
-            process_batch(batch, idx)
-            for idx, batch in enumerate(batches)
-        ]
-        polished_batches = await asyncio.gather(*tasks)
+        polished_batches = await asyncio.gather(
+            *[process_batch(batch, idx) for idx, batch in enumerate(batches)]
+        )
 
-        # Combine polished batches
         return combine_markdown_sections(
-            [b for b in polished_batches if b],
+            [batch for batch in polished_batches if batch],
             empty_message=""
         )
 
@@ -126,6 +189,7 @@ class GeminiPolisher:
             polished = await asyncio.to_thread(
                 self._call_gemini_text,
                 gemini_client,
+                self._model_name,
                 prompt,
                 original_text,
             )
@@ -147,12 +211,18 @@ class GeminiPolisher:
             logger.error(f"Batch {batch_idx} polish failed: {e}")
             return original_text
 
-    def _call_gemini_text(self, gemini_client, prompt: str, text: str) -> str:
+    def _call_gemini_text(
+        self,
+        gemini_client,
+        model_name: str,
+        prompt: str,
+        text: str,
+    ) -> str:
         """Call Gemini with text content (not PDF)."""
         from google.genai import types
 
         response = gemini_client.client.models.generate_content(
-            model=gemini_client.model_name,
+            model=model_name,
             contents=[
                 types.Content(
                     role="user",
@@ -201,8 +271,16 @@ class GeminiPolisher:
 
     def _combine_results(self, page_results: list[PageExtractionResult]) -> str:
         """Combine page results into markdown without polishing."""
-        contents = []
-        for result in page_results:
-            header = f"## Page {result.page_number + 1}\n\n"
-            contents.append(header + result.content)
+        contents = [self._render_result(result) for result in page_results]
         return combine_markdown_sections(contents, empty_message="")
+
+    def _render_result(self, result: PageExtractionResult) -> str:
+        """Render one result with its page header."""
+        return self._build_header(result) + result.content
+
+    def _build_header(self, result: PageExtractionResult) -> str:
+        """Build a markdown header for a single page or multi-page range."""
+        start_page, end_page = result.page_range
+        if start_page == end_page:
+            return f"## Page {start_page + 1}\n\n"
+        return f"## Pages {start_page + 1}-{end_page + 1}\n\n"

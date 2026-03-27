@@ -1,6 +1,6 @@
 """
 Document processing clients.
 
-This package provides implementations for various document
-processing API clients (Mistral, OpenAI, Gemini, Azure DI).
+This package marker remains for retained document-processing clients:
+Mistral for OCR and Gemini for validation/polish.
 """

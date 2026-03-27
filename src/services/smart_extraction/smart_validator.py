@@ -7,13 +7,14 @@ SimilarityCalculator components. Works with PageExtractionResult pairs
 """
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Optional
 
+from src.services.gemini_client import GeminiDocumentClient
 from src.services.smart_extraction.extraction_router import PageExtractionResult
 from src.services.validation.problem_detector import ProblemDetector
 from src.services.validation.similarity_calculator import SimilarityCalculator
 from src.services.validation.content_normalizer import ContentNormalizer
-from src.services.client_factory import get_client_factory
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,11 @@ MERGE_SIMILARITY_THRESHOLD = 0.8
 class SmartValidationService:
     """Validates and improves smart extraction results."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        gemini_client: Optional[GeminiDocumentClient] = None,
+        enable_single_source_fallback: bool = True,
+    ):
         self._normalizer = ContentNormalizer()
         self._problem_detector = ProblemDetector(
             number_extractor=self._normalizer.extract_numbers
@@ -32,6 +37,9 @@ class SmartValidationService:
         self._similarity_calculator = SimilarityCalculator(
             normalizer=self._normalizer
         )
+        self._gemini_client = gemini_client
+        self._enable_single_source_fallback = enable_single_source_fallback
+        self._concurrency = 4
 
     async def validate_results(
         self,
@@ -57,16 +65,17 @@ class SmartValidationService:
         Returns:
             Validated (and possibly improved) list of PageExtractionResult
         """
-        validated = []
+        semaphore = asyncio.Semaphore(self._concurrency)
 
-        for result in results:
-            if result.alternative_content is not None:
-                validated_result = await self._validate_dual_source(result)
-            else:
-                validated_result = await self._validate_single_source(
-                    result, pdf_bytes
-                )
-            validated.append(validated_result)
+        async def validate_result(result: PageExtractionResult) -> PageExtractionResult:
+            async with semaphore:
+                if result.alternative_content is not None:
+                    return await self._validate_dual_source(result)
+                return await self._validate_single_source(result, pdf_bytes)
+
+        validated = await asyncio.gather(*[
+            validate_result(result) for result in results
+        ])
 
         # Log summary
         improved = sum(
@@ -102,21 +111,17 @@ class SmartValidationService:
                 f"Page {result.page_number}: primary has problems, "
                 f"using alternative ({result.source} -> pdfplumber)"
             )
-            return PageExtractionResult(
-                page_number=result.page_number,
+            return replace(
+                result,
                 content=alternative,
                 source="pdfplumber",
+                strategy="text_extraction",
                 confidence=0.85,
             )
 
         if not primary_has_problem and alt_has_problem:
             # Primary is clean, keep it
-            return PageExtractionResult(
-                page_number=result.page_number,
-                content=primary,
-                source=result.source,
-                confidence=0.9,
-            )
+            return replace(result, content=primary, confidence=0.9)
 
         if not primary_has_problem and not alt_has_problem:
             # Both clean - check similarity
@@ -128,19 +133,14 @@ class SmartValidationService:
                     f"Page {result.page_number}: merging dual sources "
                     f"(similarity={similarity:.2f})"
                 )
-                return PageExtractionResult(
-                    page_number=result.page_number,
+                return replace(
+                    result,
                     content=merged,
                     source="merged",
                     confidence=0.95,
                 )
             # Similar enough - keep primary
-            return PageExtractionResult(
-                page_number=result.page_number,
-                content=primary,
-                source=result.source,
-                confidence=0.9,
-            )
+            return replace(result, content=primary, confidence=0.9)
 
         # Both problematic - keep primary (Mistral typically better for images)
         return result
@@ -159,34 +159,35 @@ class SmartValidationService:
             return result
 
         has_problem = self._has_problems(result.content)
-        if not has_problem:
+        if not has_problem or not self._enable_single_source_fallback:
+            return result
+
+        if result.page_range != (result.page_number, result.page_number):
             return result
 
         # Try Gemini fallback if available
-        if pdf_bytes:
-            gemini_client = get_client_factory().gemini_client
-            if gemini_client:
-                try:
-                    content = await asyncio.to_thread(
-                        gemini_client.extract_page_content,
-                        pdf_bytes,
-                        result.page_number,
+        if pdf_bytes and self._gemini_client:
+            try:
+                content = await asyncio.to_thread(
+                    self._gemini_client.extract_page_content,
+                    pdf_bytes,
+                    result.page_number,
+                )
+                if content.strip() and not self._has_problems(content):
+                    logger.info(
+                        f"Page {result.page_number}: Gemini fallback "
+                        f"replaced problematic {result.source} content"
                     )
-                    if content.strip() and not self._has_problems(content):
-                        logger.info(
-                            f"Page {result.page_number}: Gemini fallback "
-                            f"replaced problematic {result.source} content"
-                        )
-                        return PageExtractionResult(
-                            page_number=result.page_number,
-                            content=content,
-                            source="gemini",
-                            confidence=0.8,
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f"Gemini fallback failed for page {result.page_number}: {e}"
+                    return replace(
+                        result,
+                        content=content,
+                        source="gemini",
+                        confidence=0.8,
                     )
+            except Exception as e:
+                logger.warning(
+                    f"Gemini fallback failed for page {result.page_number}: {e}"
+                )
 
         return result
 

@@ -8,8 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.services.client_factory import get_client_factory
-from src.services.pdf_processor import PDFProcessor
+from src.core.config import settings
+from src.services.mistral_client import MistralDocumentClient
 
 
 async def test_rate_limiting():
@@ -35,8 +35,7 @@ async def test_rate_limiting():
     # Measure total time
     start_time = time.time()
 
-    # Get client
-    mistral_client = get_client_factory().mistral_client
+    mistral_client = MistralDocumentClient(api_key=settings.AZURE_API_KEY)
 
     # Process same PDF multiple times in parallel
     tasks = [

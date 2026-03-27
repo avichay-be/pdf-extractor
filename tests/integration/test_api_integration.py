@@ -6,6 +6,7 @@ and validating the responses.
 """
 import pytest
 import httpx
+import asyncio
 from pathlib import Path
 import base64
 import zipfile
@@ -19,18 +20,47 @@ import json
 TEST_PDFS_DIR = Path(__file__).parent.parent.parent / "tests" / "test_pdfs"
 OUTPUT_DIR = Path(__file__).parent.parent.parent / "tests" / "integration_output"
 TIMEOUT = 300.0  # 5 minutes for large PDFs
-from fastapi.testclient import TestClient
 from main import app
+
+
+class SyncASGIClient:
+    """Small sync wrapper around AsyncClient for integration tests."""
+
+    def __init__(self, app, headers: dict[str, str] | None = None):
+        self._app = app
+        self._headers = headers or {}
+
+    def get(self, url: str, **kwargs):
+        async def _request():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self._app),
+                base_url="http://test",
+                timeout=TIMEOUT,
+                headers=self._headers,
+            ) as client:
+                return await client.get(url, **kwargs)
+
+        return asyncio.run(_request())
+
+    def post(self, url: str, **kwargs):
+        async def _request():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=self._app),
+                base_url="http://test",
+                timeout=TIMEOUT,
+                headers=self._headers,
+            ) as client:
+                return await client.post(url, **kwargs)
+
+        return asyncio.run(_request())
 
 @pytest.fixture(scope="module")
 def api_client():
-    """Create TestClient for API calls."""
+    """Create sync HTTP client for API calls."""
     from src.core.config import settings
     settings.API_KEY = "test-key"
     settings.REQUIRE_API_KEY = True
-    client = TestClient(app)
-    client.headers["X-API-Key"] = "test-key"
-    return client
+    yield SyncASGIClient(app, headers={"X-API-Key": "test-key"})
 
 
 @pytest.fixture(scope="module")
@@ -125,9 +155,7 @@ class TestExtractEndpoint:
                 # Open and send PDF
                 with open(pdf_path, "rb") as f:
                     files = {"file": (pdf_path.name, f, "application/pdf")}
-                    data = {"query": ""}  # Empty query to get all content
-
-                    response = api_client.post("/extract", files=files, data=data)
+                    response = api_client.post("/extract", files=files)
 
                 processing_time = time.time() - start_time
 
@@ -199,8 +227,8 @@ class TestExtractEndpoint:
         failed = [r for r in results if r["status"] == "error"]
         assert len(failed) == 0, f"{len(failed)} files failed: {failed}"
 
-    def test_extract_with_query_filter(self, api_client, test_pdf_files):
-        """Test /extract endpoint with query filtering."""
+    def test_extract_without_query_parameter(self, api_client, test_pdf_files):
+        """Test /extract endpoint works without the legacy query parameter."""
         if not test_pdf_files:
             pytest.skip("No test PDFs available")
 
@@ -209,9 +237,7 @@ class TestExtractEndpoint:
 
         with open(pdf_path, "rb") as f:
             files = {"file": (pdf_path.name, f, "application/pdf")}
-            data = {"query": "דוחות כספיים"}  # Hebrew query
-
-            response = api_client.post("/extract", files=files, data=data)
+            response = api_client.post("/extract", files=files)
 
         assert response.status_code == 200
 
@@ -280,7 +306,6 @@ class TestExtractJsonEndpoint:
                 request_data = {
                     "filename": pdf_path.name,
                     "file_content": pdf_base64,
-                    "query": ""  # Empty query for all content
                 }
 
                 response = api_client.post(
@@ -366,8 +391,7 @@ class TestExtractJsonEndpoint:
         request_data = {
             "filename": pdf_path.name,
             "file_content": pdf_base64,
-            "query": "",
-            "enable_validation": True
+            "enable_cross_validation": True
         }
 
         response = api_client.post("/extract-json", json=request_data)
@@ -429,9 +453,7 @@ class TestAsyncEndpoints:
 
             with open(pdf_path, "rb") as f:
                 files = {"file": (pdf_path.name, f, "application/pdf")}
-                data = {"query": ""}
-
-                response = await async_api_client.post("/extract", files=files, data=data)
+                response = await async_api_client.post("/extract", files=files)
 
             elapsed = time.time() - start
             return {

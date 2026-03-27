@@ -11,29 +11,6 @@ logger = logging.getLogger(__name__)
 
 HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF]")
 
-def filter_outlines_by_query(outline_info: list, query: str) -> list:
-    """
-    Filter outline sections by query string (case-insensitive partial match).
-
-    Args:
-        outline_info: List of outline metadata dicts
-        query: Search query string
-
-    Returns:
-        Filtered list of outline metadata, or original list if no matches found
-    """
-    if not outline_info or not query:
-        return outline_info
-
-    query_lower = query.lower()
-    filtered = [
-        outline for outline in outline_info
-        if query_lower in outline['title'].lower()
-    ]
-
-    # If no matches found, return all outlines (fallback)
-    return filtered if filtered else outline_info
-
 
 def normalize_hebrew_text(text: str) -> str:
     """
@@ -112,10 +89,8 @@ def encode_pdf_to_base64(pdf_path: str) -> str:
     Encode PDF file to base64 string.
 
     This is a shared utility to eliminate duplication across multiple clients.
-    Previously duplicated in:
-    - mistral_client.py
-    - azure_di/client.py
-    - azure_document_intelligence_client.py
+    Previously duplicated in multiple OCR clients before the runtime was
+    collapsed to the retained Mistral-based path.
 
     Args:
         pdf_path: Path to PDF file

@@ -362,7 +362,7 @@ class TestGeminiDocumentClient(unittest.TestCase):
     def test_extract_page_content_logs_progress(
         self, mock_extract_page, mock_logger, mock_genai_client_class, mock_settings
     ):
-        """Test extraction logs start and completion messages."""
+        """Test extraction logs start and completion events."""
         # Setup
         mock_settings.GEMINI_API_KEY = self.test_api_key
 
@@ -378,15 +378,13 @@ class TestGeminiDocumentClient(unittest.TestCase):
         client = GeminiDocumentClient()
         client.extract_page_content(b'test', page_number=3)
 
-        # Assert logging calls
-        log_calls = [call[0][0] for call in mock_logger.info.call_args_list]
+        log_events = [call.args[1] for call in mock_logger.log.call_args_list]
+        debug_messages = [call.args[0] for call in mock_logger.debug.call_args_list]
 
-        # Should log start
-        self.assertTrue(any("Extracting page 3" in msg and "Gemini" in msg for msg in log_calls))
-
-        # Should log completion with character count
-        self.assertTrue(any("Successfully extracted page 3" in msg for msg in log_calls))
-        self.assertTrue(any("chars" in msg for msg in log_calls))
+        self.assertIn("gemini_page_extraction_started", log_events)
+        self.assertIn("gemini_page_extraction_completed", log_events)
+        self.assertTrue(any("Extracting page 3" in msg for msg in debug_messages))
+        self.assertTrue(any("Page extracted" in msg for msg in debug_messages))
 
     @patch('src.services.gemini_client.settings')
     @patch('src.services.gemini_client.genai.Client')

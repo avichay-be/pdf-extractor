@@ -13,7 +13,7 @@ usage() {
   cat <<EOF
 Usage: $0 --repo owner/repo \
   --azure-client-id <id> --azure-tenant-id <id> --azure-subscription-id <id> \
-  --acr-password <password> [--mistral-key <key> --openai-key <key> --di-key <key> --api-key <key>]
+  --acr-password <password> [--mistral-key <key> --gemini-key <key> --api-key <key>]
 
 This will set secrets in the given GitHub repository.
 EOF
@@ -32,8 +32,7 @@ while [[ $# -gt 0 ]]; do
     --azure-subscription-id) AZURE_SUBSCRIPTION_ID="$2"; shift 2;;
     --acr-password) ACR_PASSWORD="$2"; shift 2;;
     --mistral-key) AZURE_API_KEY="$2"; shift 2;;
-    --openai-key) AZURE_OPENAI_API_KEY="$2"; shift 2;;
-    --di-key) AZURE_DOCUMENT_INTELLIGENCE_KEY="$2"; shift 2;;
+    --gemini-key) GEMINI_API_KEY="$2"; shift 2;;
     --api-key) API_KEY="$2"; shift 2;;
     -h|--help) usage; exit 0;;
     *) echo "Unknown arg: $1"; usage; exit 1;;
@@ -56,11 +55,8 @@ gh secret set ACR_PASSWORD --repo "$REPO" --body "$ACR_PASSWORD"
 if [ -n "${AZURE_API_KEY:-}" ]; then
   gh secret set AZURE_API_KEY --repo "$REPO" --body "$AZURE_API_KEY"
 fi
-if [ -n "${AZURE_OPENAI_API_KEY:-}" ]; then
-  gh secret set AZURE_OPENAI_API_KEY --repo "$REPO" --body "$AZURE_OPENAI_API_KEY"
-fi
-if [ -n "${AZURE_DOCUMENT_INTELLIGENCE_KEY:-}" ]; then
-  gh secret set AZURE_DOCUMENT_INTELLIGENCE_KEY --repo "$REPO" --body "$AZURE_DOCUMENT_INTELLIGENCE_KEY"
+if [ -n "${GEMINI_API_KEY:-}" ]; then
+  gh secret set GEMINI_API_KEY --repo "$REPO" --body "$GEMINI_API_KEY"
 fi
 if [ -n "${API_KEY:-}" ]; then
   gh secret set API_KEY --repo "$REPO" --body "$API_KEY"

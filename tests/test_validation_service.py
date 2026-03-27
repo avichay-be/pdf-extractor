@@ -3,6 +3,8 @@ Unit tests for the validation service.
 """
 import unittest
 from unittest.mock import Mock, patch, MagicMock
+from src.core.config import settings
+from src.models.mistral_models import Dimensions, MistralOCRResponse, Page, UsageInfo
 from src.services.validation import ValidationService, ValidationResult, CrossValidationReport
 
 
@@ -462,10 +464,10 @@ class TestValidationResult(unittest.TestCase):
             has_problem_pattern=True,
             alternative_content=None,
             processing_time=0.5,
-            error="OpenAI API error"
+            error="Gemini API error"
         )
 
-        self.assertEqual(result.error, "OpenAI API error")
+        self.assertEqual(result.error, "Gemini API error")
         self.assertFalse(result.passed)
 
 
@@ -508,6 +510,58 @@ class TestCrossValidationReport(unittest.TestCase):
         self.assertEqual(len(report.validation_results), 2)
         self.assertEqual(report.total_time, 2.2)
         self.assertEqual(report.total_cost, 0.01)
+
+
+class TestCrossValidationPromptSelection(unittest.IsolatedAsyncioTestCase):
+    """Tests for workflow-agnostic validation prompt selection."""
+
+    def setUp(self):
+        self.validator_client = Mock()
+        self.validator_client.extract_page_content.return_value = "validated image page"
+        self.validation_service = ValidationService(gemini_client=self.validator_client)
+
+        self.response = MistralOCRResponse(
+            model="mistral",
+            pages=[
+                Page(
+                    index=0,
+                    markdown="![chart](image.png)",
+                    dimensions=Dimensions(dpi=72, height=1000, width=800),
+                )
+            ],
+            usage_info=UsageInfo(
+                pages_processed=1,
+                doc_size_bytes=100,
+                pages_processed_annotation=0,
+            ),
+        )
+
+    async def test_image_pages_use_generic_validation_prompts(self):
+        """Markdown image detection should always use the generic validation prompts."""
+        with patch.object(
+            self.validation_service,
+            "has_any_problem",
+            return_value=(True, ["markdown_images"]),
+        ):
+            report = await self.validation_service.cross_validate_pages(
+                self.response,
+                b"%PDF-1.4",
+            )
+
+        self.assertEqual(report.validated_pages, 1)
+        self.validator_client.extract_page_content.assert_called_once()
+
+        args = self.validator_client.extract_page_content.call_args.args
+        self.assertEqual(args[0], b"%PDF-1.4")
+        self.assertEqual(args[1], 0)
+        self.assertEqual(
+            args[2],
+            settings.get_image_validation_system_prompt("GEMINI"),
+        )
+        self.assertEqual(
+            args[3],
+            settings.get_image_validation_user_prompt_template("GEMINI"),
+        )
 
 
 if __name__ == '__main__':

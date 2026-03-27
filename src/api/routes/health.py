@@ -1,6 +1,6 @@
 import os
 import tempfile
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from src.core.config import settings
 
 router = APIRouter()
@@ -16,9 +16,8 @@ async def health_check():
     Comprehensive health check endpoint.
 
     Verifies:
-    - Configuration for all providers (Mistral, OpenAI, Gemini, Azure DI)
+    - Configuration for active engines (Mistral, Gemini)
     - File system write permissions
-    - Service availability
     """
     health_status = {
         "status": "healthy",
@@ -29,14 +28,11 @@ async def health_check():
     # Configuration checks
     config_checks = {
         "mistral_configured": bool(settings.AZURE_API_KEY and settings.MISTRAL_API_URL),
-        "openai_configured": bool(settings.AZURE_OPENAI_API_KEY and settings.AZURE_OPENAI_ENDPOINT),
         "gemini_configured": bool(settings.GEMINI_API_KEY),
-        "azure_di_configured": bool(
-            settings.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and
-            settings.AZURE_DOCUMENT_INTELLIGENCE_KEY
-        ),
         "validation_enabled": settings.ENABLE_CROSS_VALIDATION,
-        "validation_provider": settings.VALIDATION_PROVIDER if settings.ENABLE_CROSS_VALIDATION else None,
+        "validation_provider": "gemini" if settings.ENABLE_CROSS_VALIDATION else None,
+        "ocr_engine": "mistral",
+        "routing_strategy": "page_aware",
     }
     health_status.update(config_checks)
 

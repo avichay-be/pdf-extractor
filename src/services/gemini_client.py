@@ -15,6 +15,7 @@ import fitz  # PyMuPDF
 from google import genai
 from google.genai import types
 from src.core.config import settings
+from src.core.logging_utils import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,12 @@ class GeminiDocumentClient:
         # Initialize Gemini client with API key
         self.client = genai.Client(api_key=self.api_key)
 
-        logger.info(f"Initialized Gemini client with model: {self.model_name}")
+        log_event(
+            logger,
+            logging.INFO,
+            "gemini_client_initialized",
+            model=self.model_name,
+        )
 
     def _extract_single_page_pdf(self, pdf_bytes: bytes, page_number: int) -> bytes:
         """
@@ -111,7 +117,13 @@ class GeminiDocumentClient:
             Exception: If extraction fails
         """
         try:
-            logger.info(f"Extracting page {page_number} with Gemini")
+            log_event(
+                logger,
+                logging.DEBUG,
+                "gemini_page_extraction_started",
+                page_number=page_number + 1,
+                model=self.model_name,
+            )
 
             # Extract single page as PDF
             logger.debug(f"Extracting page {page_number} from PDF...")
@@ -146,7 +158,14 @@ class GeminiDocumentClient:
             # Extract the text from response
             content = response.text.strip()
 
-            logger.info(f"Successfully extracted page {page_number} ({len(content)} chars)")
+            log_event(
+                logger,
+                logging.DEBUG,
+                "gemini_page_extraction_completed",
+                page_number=page_number + 1,
+                model=self.model_name,
+                content_chars=len(content),
+            )
 
             return content
 

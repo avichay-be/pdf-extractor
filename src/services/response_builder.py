@@ -4,17 +4,23 @@ Response builder for PDF extraction endpoints.
 Handles formatting responses for both multipart/form-data and JSON endpoints,
 including single file downloads and ZIP file creation for multiple sections.
 """
+import json
 import logging
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
-from datetime import datetime
+from datetime import datetime, timezone
 import zipfile
 
 from fastapi import Response
 from fastapi.responses import StreamingResponse
 
-from src.models.api_models import OutlineExtractionResponse, ExtractedContent
+from src.models.api_models import (
+    ExtractedContent,
+    ExtractionResponseMetadata,
+    OutlineExtractionResponse,
+    ValidationSummary,
+)
 from src.models.workflow_models import WorkflowResult
 
 logger = logging.getLogger(__name__)
@@ -27,7 +33,8 @@ class ResponseBuilder:
         self,
         result: WorkflowResult,
         original_filename: str,
-        workflow_suffix: str = ""
+        workflow_suffix: str = "",
+        request_id: str = "",
     ) -> Response | StreamingResponse:
         """Build download response for /extract endpoint.
 
@@ -36,7 +43,7 @@ class ResponseBuilder:
         Args:
             result: WorkflowResult from extraction
             original_filename: Original PDF filename
-            workflow_suffix: Optional suffix for filename (e.g., "_text", "_azure_di")
+            workflow_suffix: Optional suffix for filename (for example "_ocr_all_around")
 
         Returns:
             FastAPI Response (single file) or StreamingResponse (ZIP)
@@ -47,11 +54,25 @@ class ResponseBuilder:
         # If result has sections, create ZIP file
         if result.has_sections:
             logger.info(f"Creating ZIP with {result.section_count} sections")
-            return self._create_zip_response(result, safe_filename, workflow_suffix)
+            return self._create_zip_response(
+                result=result,
+                original_filename=original_filename,
+                safe_filename=safe_filename,
+                workflow_suffix=workflow_suffix,
+                request_id=request_id,
+            )
         else:
             logger.info("Returning single markdown file")
+            markdown_content = self._append_metadata_footer(
+                content=result.content,
+                metadata=self._build_download_metadata(
+                    result=result,
+                    original_filename=original_filename,
+                    request_id=request_id,
+                ),
+            )
             return self._create_single_file_response(
-                result.content,
+                markdown_content,
                 safe_filename,
                 workflow_suffix
             )
@@ -60,7 +81,8 @@ class ResponseBuilder:
         self,
         result: WorkflowResult,
         original_filename: str,
-        request_time: datetime
+        request_time: datetime,
+        request_id: str,
     ) -> OutlineExtractionResponse:
         """Build JSON response for /extract-json endpoint.
 
@@ -96,11 +118,14 @@ class ResponseBuilder:
 
         # Build response
         response = OutlineExtractionResponse(
+            request_id=request_id,
             file_name=original_filename,
             request_time=request_time,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             model=result.metadata.get("model", "pdf-extractor-v2"),
-            extracted_content=extracted_content
+            extracted_content=extracted_content,
+            metadata=self._build_response_metadata(result, original_filename),
+            validation=self._build_legacy_validation(result.validation_report),
         )
 
         logger.info(
@@ -143,8 +168,10 @@ class ResponseBuilder:
     def _create_zip_response(
         self,
         result: WorkflowResult,
+        original_filename: str,
         safe_filename: str,
-        workflow_suffix: str = ""
+        workflow_suffix: str = "",
+        request_id: str = "",
     ) -> StreamingResponse:
         """Create ZIP response for multiple sections.
 
@@ -161,10 +188,19 @@ class ResponseBuilder:
 
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for section in result.sections:
+                section_content = self._append_metadata_footer(
+                    content=section.content,
+                    metadata=self._build_download_metadata(
+                        result=result,
+                        original_filename=original_filename,
+                        request_id=request_id,
+                        section=section,
+                    ),
+                )
                 # Add each section to ZIP
                 zip_file.writestr(
                     section.filename,
-                    section.content.encode('utf-8')
+                    section_content.encode('utf-8')
                 )
                 logger.debug(f"Added to ZIP: {section.filename}")
 
@@ -187,3 +223,107 @@ class ResponseBuilder:
                 "Content-Length": str(zip_size)
             }
         )
+
+    def _build_response_metadata(
+        self,
+        result: WorkflowResult,
+        original_filename: str,
+    ) -> ExtractionResponseMetadata:
+        """Build the public metadata object for JSON responses."""
+        raw_metadata = result.metadata or {}
+
+        return ExtractionResponseMetadata(
+            workflow=raw_metadata.get("workflow"),
+            ocr_mode=raw_metadata.get("ocr_mode"),
+            routing_strategy=raw_metadata.get("routing_strategy"),
+            total_pages=raw_metadata.get("total_pages"),
+            page_types=raw_metadata.get("page_types"),
+            page_routes=raw_metadata.get("page_routes"),
+            timing=raw_metadata.get("timing"),
+            validation_summary=self._build_validation_summary(result.validation_report),
+            source_file_name=original_filename,
+        )
+
+    def _build_validation_summary(
+        self,
+        validation_report: dict | None,
+    ) -> ValidationSummary | None:
+        """Normalize validation metadata for API exposure."""
+        if not validation_report:
+            return None
+
+        enabled = validation_report.get("enabled")
+        if isinstance(enabled, str):
+            enabled = enabled.lower() == "true"
+        elif enabled is None:
+            enabled = True
+
+        status = validation_report.get("status")
+        if status is None and enabled:
+            status = "passed"
+
+        return ValidationSummary(
+            enabled=enabled,
+            mode=validation_report.get("mode"),
+            status=status,
+            dual_source_pages=validation_report.get("dual_source_pages"),
+            total_results=validation_report.get("total_results"),
+            source_distribution=validation_report.get("source_distribution"),
+        )
+
+    def _build_legacy_validation(
+        self,
+        validation_report: dict | None,
+    ) -> dict[str, str] | None:
+        """Build the backward-compatible top-level validation field."""
+        summary = self._build_validation_summary(validation_report)
+        if summary is None:
+            return None
+
+        payload = {
+            "enabled": "true" if summary.enabled else "false",
+        }
+        if summary.status:
+            payload["status"] = summary.status
+        return payload
+
+    def _build_download_metadata(
+        self,
+        result: WorkflowResult,
+        original_filename: str,
+        request_id: str,
+        section=None,
+    ) -> dict:
+        """Build the metadata JSON appended to markdown output."""
+        public_metadata = self._build_response_metadata(result, original_filename).model_dump(
+            exclude_none=True
+        )
+        footer_metadata = {
+            "request_id": request_id,
+            "file_name": original_filename,
+        }
+
+        for key in (
+            "workflow",
+            "ocr_mode",
+            "routing_strategy",
+            "total_pages",
+            "page_types",
+            "page_routes",
+            "timing",
+            "validation_summary",
+        ):
+            if key in public_metadata:
+                footer_metadata[key] = public_metadata[key]
+
+        if section is not None:
+            footer_metadata["section_filename"] = section.filename
+            footer_metadata["section_title"] = section.title
+            footer_metadata["section_page_range"] = list(section.page_range)
+
+        return footer_metadata
+
+    def _append_metadata_footer(self, content: str, metadata: dict) -> str:
+        """Append a visible JSON metadata footer to markdown content."""
+        formatted_metadata = json.dumps(metadata, indent=2, ensure_ascii=False, sort_keys=True)
+        return f"{content.rstrip()}\n\n##### Metadata\n{formatted_metadata}"

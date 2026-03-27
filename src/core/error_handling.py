@@ -5,6 +5,7 @@ This module provides custom exceptions and decorators for consistent error handl
 across the application.
 """
 import asyncio
+import inspect
 import logging
 import time
 import uuid
@@ -13,6 +14,7 @@ from functools import wraps
 from contextvars import ContextVar
 
 from fastapi import HTTPException
+from src.core.logging_utils import build_log_extra, log_event
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,73 @@ request_id_var: ContextVar[str] = ContextVar('request_id', default='')
 # Type variables for generic function signatures
 P = ParamSpec('P')
 T = TypeVar('T')
+
+
+def generate_request_id() -> str:
+    """Generate a new request ID."""
+    return str(uuid.uuid4())
+
+
+def get_request_id() -> str:
+    """Return the current request ID, if one is set."""
+    return request_id_var.get()
+
+
+def set_request_id(request_id: str) -> str:
+    """Override the current request ID for this request context."""
+    request_id_var.set(request_id)
+    return request_id
+
+
+def ensure_request_id() -> str:
+    """Return the current request ID, creating one when missing."""
+    current_request_id = get_request_id()
+    if current_request_id:
+        return current_request_id
+
+    current_request_id = generate_request_id()
+    set_request_id(current_request_id)
+    return current_request_id
+
+
+def resolve_request_id_for_handler(
+    func: Callable,
+    args: tuple,
+    kwargs: dict,
+) -> str:
+    """Resolve the final request ID for endpoint handlers before logging."""
+    bound_arguments = inspect.signature(func).bind_partial(*args, **kwargs).arguments
+
+    request_object = next(
+        (
+            value for value in bound_arguments.values()
+            if hasattr(value, "state") and hasattr(value, "headers")
+        ),
+        None,
+    )
+
+    if func.__name__ == "extract_pdf_content":
+        request_id = generate_request_id()
+        if request_object is not None:
+            request_object.state.request_id = request_id
+        return set_request_id(request_id)
+
+    if func.__name__ == "extract_pdf_from_base64":
+        request_body = next(
+            (
+                value for value in bound_arguments.values()
+                if hasattr(value, "request_id")
+                and hasattr(value, "filename")
+                and hasattr(value, "file_content")
+            ),
+            None,
+        )
+        request_id = getattr(request_body, "request_id", None) or generate_request_id()
+        if request_object is not None:
+            request_object.state.request_id = request_id
+        return set_request_id(request_id)
+
+    return ensure_request_id()
 
 
 # ============================================================================
@@ -88,15 +157,16 @@ def handle_extraction_errors(
         @wraps(func)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             """Async wrapper for error handling with request tracking and timing."""
-            # Generate request ID if not already set
-            if not request_id_var.get():
-                request_id_var.set(str(uuid.uuid4()))
-
-            request_id = request_id_var.get()
+            request_id = resolve_request_id_for_handler(func, args, kwargs)
             start_time = time.time()
 
             try:
-                logger.info(f"[{request_id}] Starting {func.__name__}")
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "handler_started",
+                    function=func.__name__,
+                )
                 result = await func(*args, **kwargs)
                 elapsed = time.time() - start_time
 
@@ -105,83 +175,157 @@ def handle_extraction_errors(
                 threshold_ms = settings.RESPONSE_TIME_WARNING_THRESHOLD_MS
                 elapsed_ms = elapsed * 1000
                 if elapsed_ms > threshold_ms:
-                    logger.warning(
-                        f"[{request_id}] ⚠️  SLOW RESPONSE: {func.__name__} took {elapsed:.2f}s "
-                        f"({elapsed_ms:.0f}ms > {threshold_ms}ms threshold)"
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "handler_slow",
+                        function=func.__name__,
+                        elapsed_ms=round(elapsed_ms, 1),
+                        threshold_ms=threshold_ms,
                     )
                 else:
-                    logger.info(f"[{request_id}] Completed {func.__name__} in {elapsed:.2f}s")
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "handler_completed",
+                        function=func.__name__,
+                        elapsed_ms=round(elapsed_ms, 1),
+                    )
 
                 return result
             except PDFValidationError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - Validation error after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=f"PDF validation failed: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except ClientConfigurationError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - Configuration error after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=500,
                     detail=f"Service configuration error: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except WorkflowExecutionError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - Workflow error after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=500,
                     detail=f"Workflow execution failed: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except PDFExtractionError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - Extraction error after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=str(e),
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except FileNotFoundError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - File not found after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=404,
                     detail=f"File not found: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except ValueError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - Invalid value after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid input: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except Exception as e:
                 elapsed = time.time() - start_time
-                logger.exception(f"[{request_id}] {error_message} - Unexpected error in {func.__name__} after {elapsed:.2f}s: {e}")
+                logger.exception(
+                    "handler_failed",
+                    extra=build_log_extra(
+                        function=func.__name__,
+                        error_message=error_message,
+                        error_type=type(e).__name__,
+                        elapsed_ms=round(elapsed * 1000, 1),
+                        reason=str(e),
+                    ),
+                )
                 raise HTTPException(
                     status_code=500,
                     detail=f"{error_message}: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
 
         @wraps(func)
         def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             """Sync wrapper for error handling with request tracking and timing."""
-            # Generate request ID if not already set
-            if not request_id_var.get():
-                request_id_var.set(str(uuid.uuid4()))
-
-            request_id = request_id_var.get()
+            request_id = resolve_request_id_for_handler(func, args, kwargs)
             start_time = time.time()
 
             try:
-                logger.info(f"[{request_id}] Starting {func.__name__}")
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "handler_started",
+                    function=func.__name__,
+                )
                 result = func(*args, **kwargs)
                 elapsed = time.time() - start_time
 
@@ -190,69 +334,142 @@ def handle_extraction_errors(
                 threshold_ms = settings.RESPONSE_TIME_WARNING_THRESHOLD_MS
                 elapsed_ms = elapsed * 1000
                 if elapsed_ms > threshold_ms:
-                    logger.warning(
-                        f"[{request_id}] ⚠️  SLOW RESPONSE: {func.__name__} took {elapsed:.2f}s "
-                        f"({elapsed_ms:.0f}ms > {threshold_ms}ms threshold)"
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "handler_slow",
+                        function=func.__name__,
+                        elapsed_ms=round(elapsed_ms, 1),
+                        threshold_ms=threshold_ms,
                     )
                 else:
-                    logger.info(f"[{request_id}] Completed {func.__name__} in {elapsed:.2f}s")
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "handler_completed",
+                        function=func.__name__,
+                        elapsed_ms=round(elapsed_ms, 1),
+                    )
 
                 return result
             except PDFValidationError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - Validation error after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=f"PDF validation failed: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except ClientConfigurationError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - Configuration error after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=500,
                     detail=f"Service configuration error: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except WorkflowExecutionError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - Workflow error after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=500,
                     detail=f"Workflow execution failed: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except PDFExtractionError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - Extraction error after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=str(e),
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except FileNotFoundError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - File not found after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=404,
                     detail=f"File not found: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except ValueError as e:
                 elapsed = time.time() - start_time
-                logger.error(f"[{request_id}] {error_message} - Invalid value after {elapsed:.2f}s: {e}")
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "handler_failed",
+                    function=func.__name__,
+                    error_message=error_message,
+                    error_type=type(e).__name__,
+                    elapsed_ms=round(elapsed * 1000, 1),
+                    reason=str(e),
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid input: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
             except Exception as e:
                 elapsed = time.time() - start_time
-                logger.exception(f"[{request_id}] {error_message} - Unexpected error in {func.__name__} after {elapsed:.2f}s: {e}")
+                logger.exception(
+                    "handler_failed",
+                    extra=build_log_extra(
+                        function=func.__name__,
+                        error_message=error_message,
+                        error_type=type(e).__name__,
+                        elapsed_ms=round(elapsed * 1000, 1),
+                        reason=str(e),
+                    ),
+                )
                 raise HTTPException(
                     status_code=500,
                     detail=f"{error_message}: {str(e)}",
-                    headers={"X-Request-ID": request_id}
+                    headers={"X-Request-ID": ensure_request_id()}
                 )
 
         # Return appropriate wrapper based on function type
