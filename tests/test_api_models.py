@@ -5,7 +5,15 @@ import unittest
 import base64
 from pydantic import ValidationError
 
-from src.models.api_models import Base64FileRequest, ExtractionResponse
+from datetime import datetime, timezone
+
+from src.models.api_models import (
+    Base64FileRequest,
+    ExtractionResponse,
+    ExtractedContent,
+    ExtractionResponseMetadata,
+    OutlineExtractionResponse,
+)
 
 
 class TestBase64FileRequest(unittest.TestCase):
@@ -20,10 +28,16 @@ class TestBase64FileRequest(unittest.TestCase):
         """Test creating request with valid data."""
         request = Base64FileRequest(
             filename="test.pdf",
-            file_content=self.valid_base64
+            file_content=self.valid_base64,
+            request_id="req-123",
+            enable_cross_validation=False,
+            enable_polishing=True,
         )
         self.assertEqual(request.filename, "test.pdf")
         self.assertEqual(request.file_content, self.valid_base64)
+        self.assertEqual(request.request_id, "req-123")
+        self.assertFalse(request.enable_cross_validation)
+        self.assertTrue(request.enable_polishing)
 
     def test_filename_without_pdf_extension(self):
         """Test that filename must end with .pdf."""
@@ -79,11 +93,47 @@ class TestBase64FileRequest(unittest.TestCase):
         """Test that model can be serialized to dict."""
         request = Base64FileRequest(
             filename="test.pdf",
-            file_content=self.valid_base64
+            file_content=self.valid_base64,
+            request_id="req-123",
+            enable_cross_validation=False,
+            enable_polishing=True,
         )
         dumped = request.model_dump()
         self.assertEqual(dumped['filename'], "test.pdf")
         self.assertEqual(dumped['file_content'], self.valid_base64)
+        self.assertEqual(dumped['request_id'], "req-123")
+        self.assertFalse(dumped['enable_cross_validation'])
+        self.assertTrue(dumped['enable_polishing'])
+
+    def test_legacy_model_field_is_ignored(self):
+        """Legacy provider model field should no longer be part of the schema."""
+        request = Base64FileRequest(
+            filename="test.pdf",
+            file_content=self.valid_base64,
+            model="mistral",
+        )
+        dumped = request.model_dump()
+        self.assertNotIn("model", dumped)
+
+    def test_legacy_query_field_is_ignored(self):
+        """Legacy query field should no longer be part of the schema."""
+        request = Base64FileRequest(
+            filename="test.pdf",
+            file_content=self.valid_base64,
+            query="01_Fin_Reports",
+        )
+        dumped = request.model_dump()
+        self.assertNotIn("query", dumped)
+
+    def test_legacy_enable_validation_field_is_ignored(self):
+        """Legacy validation flag should no longer be part of the public schema."""
+        request = Base64FileRequest(
+            filename="test.pdf",
+            file_content=self.valid_base64,
+            enable_validation=True,
+        )
+        dumped = request.model_dump()
+        self.assertNotIn("enable_validation", dumped)
 
 
 class TestExtractionResponse(unittest.TestCase):
@@ -142,6 +192,32 @@ class TestExtractionResponse(unittest.TestCase):
         json_str = response.model_dump_json()
         self.assertIn("test.pdf", json_str)
         self.assertIn("Test content", json_str)
+
+
+class TestOutlineExtractionResponse(unittest.TestCase):
+    """Test the rich JSON extraction response model."""
+
+    def test_response_includes_request_id_and_metadata(self):
+        response = OutlineExtractionResponse(
+            request_id="req-123",
+            file_name="test.pdf",
+            request_time=datetime.now(timezone.utc),
+            timestamp=datetime.now(timezone.utc),
+            extracted_content=[
+                ExtractedContent(filename="test.md", content="# Title")
+            ],
+            metadata=ExtractionResponseMetadata(
+                workflow="ocr",
+                ocr_mode="tables",
+                source_file_name="test.pdf",
+            ),
+            validation={"enabled": "true", "status": "passed"},
+        )
+
+        dumped = response.model_dump()
+        self.assertEqual(dumped["request_id"], "req-123")
+        self.assertEqual(dumped["metadata"]["workflow"], "ocr")
+        self.assertEqual(dumped["metadata"]["ocr_mode"], "tables")
 
 
 if __name__ == '__main__':

@@ -1,11 +1,12 @@
 import logging
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from src.core.config import settings
 from src.core.error_handling import request_id_var
+from src.core.logging_utils import render_extra_fields
 
 
 class RequestIDFilter(logging.Filter):
@@ -24,7 +25,7 @@ class JSONFormatter(logging.Formatter):
     """
     def format(self, record: logging.LogRecord) -> str:
         log_obj: Dict[str, Any] = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "level": record.levelname,
             "name": record.name,
             "message": record.getMessage(),
@@ -43,6 +44,17 @@ class JSONFormatter(logging.Formatter):
             
         return json.dumps(log_obj)
 
+
+class DecoratedTextFormatter(logging.Formatter):
+    """Plain-text formatter that appends structured log fields."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        extra_fields = getattr(record, "extra_fields", None)
+        if extra_fields:
+            message = f"{message} | {render_extra_fields(extra_fields)}"
+        return message
+
 def setup_logging() -> None:
     """
     Configure logging for the application.
@@ -56,7 +68,7 @@ def setup_logging() -> None:
     if settings.LOG_FORMAT.lower() == "json":
         formatter = JSONFormatter()
     else:
-        formatter = logging.Formatter(
+        formatter = DecoratedTextFormatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s" + (
                 " - request_id=%(request_id)s" if settings.LOG_INCLUDE_REQUEST_ID else ""
             )

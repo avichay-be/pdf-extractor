@@ -12,8 +12,9 @@ import unittest
 from unittest.mock import Mock, patch, MagicMock
 from pathlib import Path
 import os
+from types import SimpleNamespace
 
-from src.services.gemini_client import GeminiDocumentClient
+from src.services.gemini_client import GeminiDocumentClient, extract_gemini_text_response
 
 
 class TestGeminiDocumentClient(unittest.TestCase):
@@ -23,6 +24,27 @@ class TestGeminiDocumentClient(unittest.TestCase):
         """Set up test fixtures."""
         self.test_api_key = "test_gemini_api_key_12345"
         self.test_model = "gemini-2.5-flash"
+
+    def test_extract_gemini_text_response_reads_text_parts(self):
+        """Test text extraction skips non-text response parts without using response.text."""
+        class ResponseWithWarningText:
+            candidates = [
+                SimpleNamespace(
+                    content=SimpleNamespace(
+                        parts=[
+                            SimpleNamespace(text="first "),
+                            SimpleNamespace(thought_signature=b"ignored"),
+                            SimpleNamespace(text="second"),
+                        ]
+                    )
+                )
+            ]
+
+            @property
+            def text(self):
+                raise AssertionError("response.text should not be accessed")
+
+        assert extract_gemini_text_response(ResponseWithWarningText()) == "first second"
 
     # ========== Initialization Tests ==========
 
@@ -253,6 +275,31 @@ class TestGeminiDocumentClient(unittest.TestCase):
 
     @patch('src.services.gemini_client.settings')
     @patch('src.services.gemini_client.genai.Client')
+    @patch.object(GeminiDocumentClient, '_extract_single_page_pdf')
+    def test_extract_page_content_repairs_hebrew_nun_artifact(
+        self, mock_extract_page, mock_genai_client_class, mock_settings
+    ):
+        """Test Gemini output repairs Hebrew nun OCR artifacts."""
+        mock_settings.GEMINI_API_KEY = self.test_api_key
+        mock_settings.GEMINI_MODEL = self.test_model
+        mock_settings.get_system_prompt.return_value = "Extract Hebrew."
+        mock_settings.get_user_prompt_template.return_value = "Extract page {page_number}"
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = "דוח רואי חשבון המבקרים לבעלי המðיות"
+        mock_client.models.generate_content.return_value = mock_response
+        mock_genai_client_class.return_value = mock_client
+        mock_extract_page.return_value = b'single_page_pdf_bytes'
+
+        client = GeminiDocumentClient()
+        result = client.extract_page_content(b'test_pdf_bytes', page_number=0)
+
+        self.assertIn("המניות", result)
+        self.assertNotIn("ð", result)
+
+    @patch('src.services.gemini_client.settings')
+    @patch('src.services.gemini_client.genai.Client')
     @patch('src.services.gemini_client.types.Part')
     @patch.object(GeminiDocumentClient, '_extract_single_page_pdf')
     def test_extract_page_content_uses_pdf_mime_type(
@@ -362,7 +409,7 @@ class TestGeminiDocumentClient(unittest.TestCase):
     def test_extract_page_content_logs_progress(
         self, mock_extract_page, mock_logger, mock_genai_client_class, mock_settings
     ):
-        """Test extraction logs start and completion messages."""
+        """Test extraction logs start and completion events."""
         # Setup
         mock_settings.GEMINI_API_KEY = self.test_api_key
 
@@ -378,15 +425,13 @@ class TestGeminiDocumentClient(unittest.TestCase):
         client = GeminiDocumentClient()
         client.extract_page_content(b'test', page_number=3)
 
-        # Assert logging calls
-        log_calls = [call[0][0] for call in mock_logger.info.call_args_list]
+        log_events = [call.args[1] for call in mock_logger.log.call_args_list]
+        debug_messages = [call.args[0] for call in mock_logger.debug.call_args_list]
 
-        # Should log start
-        self.assertTrue(any("Extracting page 3" in msg and "Gemini" in msg for msg in log_calls))
-
-        # Should log completion with character count
-        self.assertTrue(any("Successfully extracted page 3" in msg for msg in log_calls))
-        self.assertTrue(any("chars" in msg for msg in log_calls))
+        self.assertIn("gemini_page_extraction_started", log_events)
+        self.assertIn("gemini_page_extraction_completed", log_events)
+        self.assertTrue(any("Extracting page 3" in msg for msg in debug_messages))
+        self.assertTrue(any("Page extracted" in msg for msg in debug_messages))
 
     @patch('src.services.gemini_client.settings')
     @patch('src.services.gemini_client.genai.Client')

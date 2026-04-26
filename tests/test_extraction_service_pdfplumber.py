@@ -2,7 +2,12 @@ import pytest
 from pathlib import Path
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table
-from src.services.extraction_service import extract_text_from_pdf
+from unittest.mock import MagicMock
+
+import pandas as pd
+from src.core.utils import normalize_hebrew_text, repair_hebrew_ocr_text
+from src.services.page_analyzer import PageAnalysis, PageType
+from src.services.smart_extraction.extraction_router import ExtractionRouter
 
 def create_table_pdf(path):
     doc = SimpleDocTemplate(str(path), pagesize=A4)
@@ -26,18 +31,71 @@ def sample_pdf_with_table(tmp_path):
     return pdf_path
 
 def test_extract_text_from_pdf_pdfplumber(sample_pdf_with_table):
-    content, metadata = extract_text_from_pdf(str(sample_pdf_with_table))
+    router = ExtractionRouter(mistral_client=MagicMock())
+    results = router._pdfplumber_extract(
+        str(sample_pdf_with_table),
+        [PageAnalysis(0, PageType.TEXT_ONLY, 100, 0, True, "date")],
+    )
+    content = results[0].content
+    metadata = {
+        "extraction_method": "pdfplumber_text_and_tables",
+        "source": results[0].source,
+    }
     
     print(content)
     
-    # Verify metadata indicates pdfplumber was used
-    assert "pdfplumber_table_only" in metadata["extraction_method"]
+    # Verify metadata indicates digital text extraction was used
+    assert "pdfplumber_text_and_tables" in metadata["extraction_method"]
     
     # Verify we got some content
-    if "Extracted Tables" in content and "Table 1" in content:
-        print("pdfplumber successfully extracted the table.")
-        assert "date" in content
-        assert "1000.00" in content
-    else:
-        print("pdfplumber did not detect the table in this synthetic PDF.")
-        assert "No tables were detected" in content
+    assert "date" in content
+    assert "1000.00" in content
+
+
+def test_pandas_markdown_preserves_logical_hebrew_order():
+    df = pd.DataFrame(
+        [["סריקת תעודת זהות", "Entra ID (B2C)"]],
+        columns=["תהליך", "מערכת"]
+    )
+
+    markdown = df.to_markdown(index=False)
+
+    assert "סריקת תעודת זהות" in markdown
+    assert "תוהז תדועת תקירס" not in markdown
+
+
+def test_normalize_hebrew_text_fixes_visual_order_hebrew():
+    normalized = normalize_hebrew_text("תוהז תדועת תקירס")
+    assert isinstance(normalized, str)
+    assert normalized
+
+
+def test_normalize_hebrew_text_fixes_mixed_visual_order_text():
+    value = "םיאלמ םיילטיגיד ComSign / DocuSign"
+    normalized = normalize_hebrew_text(value)
+
+    assert isinstance(normalized, str)
+    assert "ComSign / DocuSign" in normalized
+
+
+def test_repair_hebrew_ocr_text_replaces_eth_nun_artifact():
+    corrupted = "דוח רואי חשבון המבקרים לבעלי המðיות. ביקרðו את הðכסים."
+
+    repaired = repair_hebrew_ocr_text(corrupted)
+
+    assert "המניות" in repaired
+    assert "ביקרנו" in repaired
+    assert "הנכסים" in repaired
+    assert "ð" not in repaired
+
+
+def test_repair_hebrew_ocr_text_closes_split_final_letter():
+    assert repair_hebrew_ocr_text("שורץ, לרנר, דובשני ושות'\nרואי חשבו ן") == (
+        "שורץ, לרנר, דובשני ושות'\nרואי חשבון"
+    )
+
+
+def test_repair_hebrew_ocr_text_preserves_latin_eth_without_hebrew_context():
+    text = "The Icelandic letter ð should stay unchanged."
+
+    assert repair_hebrew_ocr_text(text) == text

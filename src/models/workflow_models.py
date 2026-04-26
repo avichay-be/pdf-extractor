@@ -6,6 +6,8 @@ This module provides data structures for workflow execution results and extracte
 from dataclasses import dataclass, field
 from typing import Optional, List, Any
 
+from src.core.utils import repair_hebrew_ocr_text
+
 
 @dataclass
 class ExtractedSection:
@@ -27,6 +29,7 @@ class ExtractedSection:
         """Validate page range."""
         if self.page_range[0] > self.page_range[1]:
             raise ValueError(f"Invalid page range: {self.page_range}")
+        self.content = repair_hebrew_ocr_text(self.content)
 
 
 @dataclass
@@ -50,8 +53,12 @@ class WorkflowResult:
 
     def __post_init__(self):
         """Initialize default values."""
+        self.content = repair_hebrew_ocr_text(self.content)
         if self.sections is None:
             self.sections = []
+        else:
+            for section in self.sections:
+                section.content = repair_hebrew_ocr_text(section.content)
         if self.metadata is None:
             self.metadata = {}
 

@@ -1,7 +1,7 @@
 """
 Configuration settings for the application.
 """
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional, List
 
 
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     INCLUDE_IMAGES: bool = False  # Set to True to include image references in output
 
     # Input Guardrails
-    MAX_UPLOAD_MB: int = 25  # Max upload size for PDFs (uncompressed)
+    MAX_UPLOAD_MB: int = 60  # Max upload size for PDFs (uncompressed)
     MAX_BASE64_LENGTH: int = 40_000_000  # Max base64 characters (~30 MB decoded)
     MAX_PDF_PAGES: int = 600  # Hard cap to avoid runaway processing
 
@@ -47,45 +47,36 @@ class Settings(BaseSettings):
     MISTRAL_RETRY_ATTEMPTS: int = 3  # Number of retry attempts for 429 errors
     MISTRAL_RETRY_DELAY: float = 5.0  # Initial delay in seconds for exponential backoff
 
-    # Azure Document Intelligence Configuration (for table extraction)
-    AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: Optional[str] = None
-    AZURE_DOCUMENT_INTELLIGENCE_KEY: Optional[str] = None
-    AZURE_DOCUMENT_INTELLIGENCE_MODEL: str = "prebuilt-layout"  # Model for layout and table extraction
-    AZURE_DI_USE_NUMERICAL_VALIDATION: bool = True  # Enable numerical validation for table merging
-    AZURE_DI_BALANCE_TOLERANCE: float = 0.01  # Tolerance for balance comparison (for rounding)
-
-    # Query-Workflow Mapping
-    # Maps query patterns to processing workflows
-    # Workflow options: "text_extraction", "azure_document_intelligence", "mistral", "openai", "gemini", "gemini-wf", "ocr_with_images"
-    QUERY_WORKFLOW_MAPPING: dict = {
-        # Bank pages/statements - use Azure Document Intelligence API for smart table extraction
-        "01_Fin_Reports": "mistral",
-        "02_Trial_Balance": "azure_document_intelligence",
-        "03_Balances": "azure_document_intelligence",
-        "04_Bank_Statements": "text_extraction",
-        # Esna documents - use simple text extraction (pdfplumber)
-        #"esna": "text_extraction",
-        "05_Esna": "azure_document_intelligence",
-        "ocr with images": "ocr_with_images",
-        "gemini-wf": "gemini-wf",  # Gemini page-by-page async processing
-        # Default fallback
-        "default": "mistral"
-    }
-
-    # Azure OpenAI Configuration (for cross-validation)
-    AZURE_OPENAI_API_KEY: Optional[str] = None
-    AZURE_OPENAI_ENDPOINT: Optional[str] = None
-    AZURE_OPENAI_DEPLOYMENT: str = "gpt-4o"
-    AZURE_OPENAI_API_VERSION: str = "2024-02-15-preview"
-
-    # Google Gemini Configuration (DEPRECATED - kept for backward compatibility)
-    # NOTE: Gemini validation support has been removed. Only OpenAI is supported for cross-validation.
+    # Google Gemini Configuration
     GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-2.5-flash"  # Gemini Flash Lite
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+
+    # Smart Extraction Configuration
+    SMART_EXTRACTION_AUTO_DETECT: bool = True  # Auto-detect mixed PDFs and route to smart extraction
+    SMART_EXTRACTION_TEXT_THRESHOLD: int = 50  # Min chars to consider a page as having text
+    SMART_EXTRACTION_MISTRAL_BATCH_SIZE: int = 10  # Max consecutive image pages per Mistral call
+    # Avoid page-by-page Gemini calls for digital text pages by default.
+    SMART_EXTRACTION_GEMINI_FALLBACK_FOR_PDFPLUMBER: bool = False
+    SMART_EXTRACTION_POLISH_ENABLED: bool = True  # Enable Gemini polish pass
+    SMART_EXTRACTION_POLISH_BATCH_SIZE: int = 50  # Pages per Gemini polish call
+    SMART_EXTRACTION_POLISH_CONCURRENCY: int = 3  # Max parallel Gemini polish calls
+    SMART_EXTRACTION_POLISH_MODEL: Optional[str] = None  # None = reuse GEMINI_MODEL
+    SMART_EXTRACTION_POLISH_PROMPT: Optional[str] = None  # Custom polish prompt (None = use default)
+    DEFAULT_SMART_EXTRACTION_POLISH_PROMPT: str = """You are a document formatting expert. Clean up extracted PDF content into well-formatted markdown optimized for LLM consumption.
+
+RULES:
+1. Fix OCR errors (common: 0/O, 1/l, rn/m, Hebrew character confusions)
+2. Normalize table formatting (consistent columns, proper alignment)
+3. Ensure consistent heading hierarchy (H2 for sections, H3 for subsections)
+4. Remove duplicate content at page boundaries
+5. Fix encoding artifacts and garbled characters
+6. Preserve ALL numerical data EXACTLY as-is (never modify numbers)
+7. Preserve ALL text content (never summarize or omit)
+8. Clean up excessive whitespace
+9. Output ONLY the cleaned markdown - no explanations"""
 
     # Cross-Validation Settings
     ENABLE_CROSS_VALIDATION: bool = True
-    VALIDATION_PROVIDER: str = "openai"  # Options: "openai" (gemini validation deprecated)
     VALIDATION_SAMPLE_RATE: int = 5  # Validate every Nth page
     VALIDATION_SIMILARITY_THRESHOLD: float = 0.95  # 95% similarity = 5% error tolerance
     VALIDATION_SIMILARITY_METHOD: str = "number_frequency"  # Options: "number_frequency", "levenshtein"
@@ -112,8 +103,7 @@ class Settings(BaseSettings):
             ]
         return [p.strip() for p in self.VALIDATION_PROBLEMS_ENABLED.split(',') if p.strip()]
 
-    # Shared Prompts for PDF Extraction (used by OpenAI, Gemini, and Claude)
-    # Can be overridden individually via environment variables if needed
+    # Shared prompts for Gemini validation and polish fallback
     DEFAULT_SYSTEM_PROMPT: str = """You are an expert PDF content extractor. Your task is to extract text content from PDF pages and convert it to clean markdown format.
 
 Key Requirements:
@@ -130,22 +120,12 @@ Be thorough and accurate."""
     DEFAULT_USER_PROMPT_TEMPLATE: str = """Extract all text content from this PDF page (originally page {page_number}) and convert it to markdown format. Include tables with proper markdown syntax. Do not skip any content. Preserve the original structure and formatting as much as possible.
 The content is finance data, so be extra careful with tables and numbers."""
 
-    # Individual provider prompts (defaults to shared prompts if not set in environment)
-    OPENAI_SYSTEM_PROMPT: Optional[str] = None
-    OPENAI_USER_PROMPT_TEMPLATE: Optional[str] = None
     GEMINI_SYSTEM_PROMPT: Optional[str] = None
     GEMINI_USER_PROMPT_TEMPLATE: Optional[str] = None
-
-    # OCR with Images Configuration
-    OCR_WITH_IMAGES_DEFAULT_PROMPT: str = "Please extract all data from this image in a structured format."
 
     # Image-Specific Validation Prompts
     IMAGE_VALIDATION_SYSTEM_PROMPT: Optional[str] = None
     IMAGE_VALIDATION_USER_PROMPT_TEMPLATE: Optional[str] = None
-
-    # Finance-Specific Image Validation Prompts (for 01_Fin_Reports workflow)
-    GEMINI_FINANCE_IMAGE_SYSTEM_PROMPT: Optional[str] = None
-    GEMINI_FINANCE_IMAGE_USER_PROMPT_TEMPLATE: Optional[str] = None
 
     # Defaults if not configured in .env
     DEFAULT_IMAGE_VALIDATION_SYSTEM_PROMPT: str = """You are an expert PDF content extractor specializing in documents with charts, diagrams, and images. Your task is to extract ALL content from PDF pages, paying special attention to visual elements.
@@ -163,80 +143,17 @@ Be thorough and accurate, especially with visual data."""
 
     DEFAULT_IMAGE_VALIDATION_USER_PROMPT_TEMPLATE: str = """Extract all text content from this PDF page (originally page {page_number}) and convert it to markdown format. This page contains images, charts, or diagrams - please describe them thoroughly and extract any visible data values. Include tables with proper markdown syntax. Do not skip any content."""
 
-    # Finance-Specific Prompts for 01_Fin_Reports with Images
-    DEFAULT_GEMINI_FINANCE_IMAGE_SYSTEM_PROMPT: str = """You are an expert at extracting financial and real estate TEXT and TABLES from PDF documents.
-
-CRITICAL RULES:
-1. Output ONLY markdown format - NEVER use HTML tags like <table>, <tr>, <th>, <td>
-2. IGNORE ALL IMAGES - Do not extract data from images, do not describe images, skip all visual elements
-3. Extract ONLY text content and numerical tables
-
-WHAT TO EXTRACT:
-✅ Text paragraphs and headings
-✅ Numerical tables with ALL columns (especially the leftmost column with row labels)
-✅ Monetary values (₪, NIS, USD, EUR, etc.)
-✅ Percentages (%)
-✅ Dates (all formats: DD/MM/YYYY, בדצמבר 31, etc.)
-✅ Property measurements (מ"ר, דונם, sqm, hectares)
-✅ Property identifiers (גוש, חלקה, מגרש, plot numbers)
-✅ Unit counts (יח"ד, apartments, units)
-✅ Company names, party names
-✅ License/permit numbers
-✅ Building rights (אחוזי בניה, תכסית, קומות)
-✅ Transaction details (buyer, seller, price, date, area)
-✅ Balance sheet items, P&L items, financial statements
-✅ Asset valuations
-✅ Interest rates, loan terms
-✅ Exchange rates (שער חליפין)
-✅ Index values (מדד)
-
-WHAT TO IGNORE:
-❌ ALL images, charts, diagrams, graphs - SKIP THEM COMPLETELY
-❌ Logos and graphics
-❌ Maps and location diagrams
-❌ Architectural drawings
-❌ Property photos
-❌ Any visual elements
-
-TABLE EXTRACTION - CRITICAL:
-1. Use ONLY markdown table format with | separators
-2. NEVER use HTML tags (<table>, <tr>, <th>, <td>, etc.)
-3. For complex headers (rowspan/colspan), flatten to simple markdown tables
-4. Extract ALL columns including the leftmost column with row descriptions (do NOT skip the first column)
-5. Example markdown table:
-   | Row Description | Header 1 | Header 2 | Header 3 |
-   |-----------------|----------|----------|----------|
-   | Data row 1      | Data 1   | Data 2   | Data 3   |
-6. Preserve Hebrew text accurately
-7. Do NOT add explanations - return ONLY extracted data in markdown format"""
-
-    DEFAULT_GEMINI_FINANCE_IMAGE_USER_PROMPT_TEMPLATE: str = """Extract all TEXT and TABLES from page {page_number}. IGNORE all images completely.
-
-CRITICAL REQUIREMENTS:
-1. SKIP all images, charts, diagrams - do NOT extract data from them
-2. Extract ONLY text paragraphs and numerical tables
-3. Use ONLY markdown table syntax with | separators (NEVER HTML tags)
-4. Extract ALL table columns including row labels (leftmost column - very important!)
-5. Flatten complex headers (rowspan/colspan) into simple markdown tables
-6. Preserve all monetary values, percentages, dates, and measurements
-
-Return ONLY the extracted text and tables in clean markdown format."""
-
     def get_system_prompt(self, provider: str) -> str:
         """Get system prompt for a specific provider, with fallback to default."""
-        provider_prompts = {
-            "openai": self.OPENAI_SYSTEM_PROMPT,
-            "gemini": self.GEMINI_SYSTEM_PROMPT
-        }
-        return provider_prompts.get(provider.lower()) or self.DEFAULT_SYSTEM_PROMPT
+        if provider.lower() == "gemini" and self.GEMINI_SYSTEM_PROMPT:
+            return self.GEMINI_SYSTEM_PROMPT
+        return self.DEFAULT_SYSTEM_PROMPT
 
     def get_user_prompt_template(self, provider: str) -> str:
         """Get user prompt template for a specific provider, with fallback to default."""
-        provider_prompts = {
-            "openai": self.OPENAI_USER_PROMPT_TEMPLATE,
-            "gemini": self.GEMINI_USER_PROMPT_TEMPLATE
-        }
-        return provider_prompts.get(provider.lower()) or self.DEFAULT_USER_PROMPT_TEMPLATE
+        if provider.lower() == "gemini" and self.GEMINI_USER_PROMPT_TEMPLATE:
+            return self.GEMINI_USER_PROMPT_TEMPLATE
+        return self.DEFAULT_USER_PROMPT_TEMPLATE
 
     def get_image_validation_system_prompt(self, provider: str) -> str:
         """Get image-specific system prompt with fallback to defaults."""
@@ -252,24 +169,18 @@ Return ONLY the extracted text and tables in clean markdown format."""
             or self.DEFAULT_IMAGE_VALIDATION_USER_PROMPT_TEMPLATE
         )
 
-    def get_finance_image_system_prompt(self) -> str:
-        """Get finance-specific image system prompt for 01_Fin_Reports workflow."""
+    def get_smart_extraction_polish_prompt(self) -> str:
+        """Get the Gemini polish prompt with fallback to the default."""
         return (
-            self.GEMINI_FINANCE_IMAGE_SYSTEM_PROMPT
-            or self.DEFAULT_GEMINI_FINANCE_IMAGE_SYSTEM_PROMPT
+            self.SMART_EXTRACTION_POLISH_PROMPT
+            or self.DEFAULT_SMART_EXTRACTION_POLISH_PROMPT
         )
 
-    def get_finance_image_user_prompt_template(self) -> str:
-        """Get finance-specific image user prompt template for 01_Fin_Reports workflow."""
-        return (
-            self.GEMINI_FINANCE_IMAGE_USER_PROMPT_TEMPLATE
-            or self.DEFAULT_GEMINI_FINANCE_IMAGE_USER_PROMPT_TEMPLATE
-        )
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore"  # Allow extra fields in .env for backward compatibility
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 settings = Settings()

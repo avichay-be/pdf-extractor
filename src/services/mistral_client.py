@@ -90,6 +90,10 @@ class MistralDocumentClient:
             return get_async_client(timeout=self.timeout)
         return self._client
 
+    def _encode_pdf_to_base64(self, pdf_path: str) -> str:
+        """Backward-compatible wrapper for older callers/tests."""
+        return encode_pdf_to_base64(pdf_path)
+
     async def _enforce_rate_limit(self):
         """
         Enforce rate limiting by waiting if necessary.
@@ -135,7 +139,6 @@ class MistralDocumentClient:
         has_query: bool = False,
         enable_validation: Optional[bool] = None,
         include_images: Optional[bool] = None,
-        workflow_name: Optional[str] = None
     ) -> tuple[str, Optional[dict]]:
         """
         Process a PDF document and return markdown content with optional cross-validation.
@@ -148,7 +151,6 @@ class MistralDocumentClient:
             pdf_bytes: Pre-read PDF bytes (optional, prevents file system race conditions during validation)
             has_query: Whether query filtering is active (affects validation sampling)
             enable_validation: Override global ENABLE_CROSS_VALIDATION setting (None=use global, True=force enable, False=force disable)
-            workflow_name: Name of the workflow (e.g., "01_Fin_Reports") for workflow-specific validation
 
         Returns:
             Tuple of (markdown_content, validation_report_dict or None)
@@ -229,17 +231,16 @@ class MistralDocumentClient:
                                 validation_report = await validation_service.cross_validate_pages(
                                     ocr_response,
                                     validation_bytes,
-                                    has_query=has_query,
-                                    workflow_name=workflow_name
+                                    has_query=has_query
                                 )
 
                                 # Apply fixes for problem pages
                                 for result in validation_report.validation_results:
                                     if result.has_problem_pattern and result.alternative_content:
-                                        # Replace problematic page content with GPT-4o result
+                                        # Replace problematic page content with Gemini result
                                         logger.info(
                                             f"[Page {result.page_number}] Replacing problematic content "
-                                            f"with GPT-4o extraction"
+                                            f"with Gemini extraction"
                                         )
                                         ocr_response.pages[result.page_number].markdown = result.alternative_content
 

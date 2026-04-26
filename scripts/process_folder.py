@@ -1,11 +1,8 @@
-import os
 import argparse
 import asyncio
 import aiohttp
 import logging
 from pathlib import Path
-from typing import List
-import time
 
 # Configure logging
 logging.basicConfig(
@@ -20,7 +17,6 @@ async def process_file(
     output_dir: Path,
     api_url: str,
     api_key: str,
-    query: str = "04_Banks_Statments"
 ):
     """
     Process a single PDF file: send to API and save result.
@@ -34,8 +30,7 @@ async def process_file(
             data = aiohttp.FormData()
             data.add_field('file', f, filename=filename, content_type='application/pdf')
             
-            # Add query parameter if needed
-            url = f"{api_url}/extract?query={query}"
+            url = f"{api_url}/extract"
             
             headers = {
                 "x-api-key": api_key
@@ -81,13 +76,12 @@ async def main():
     parser.add_argument("--output-dir", required=True, help="Directory to save output MD/ZIP files")
     parser.add_argument("--api-url", default="http://localhost:8000", help="Base URL of the API")
     parser.add_argument("--api-key", required=True, help="API Key for authentication")
-    parser.add_argument("--query", default="דוחות כספיים", help="Query to filter sections (default: 'דוחות כספיים')")
     parser.add_argument("--concurrency", type=int, default=5, help="Number of concurrent requests")
     
     args = parser.parse_args()
     
-    input_dir = "data/bank_statements/"
-    output_dir = "out/bank_state/"
+    input_dir = Path(args.input_dir)
+    output_dir = Path(args.output_dir)
     
     if not input_dir.exists():
         logger.error(f"Input directory does not exist: {input_dir}")
@@ -110,7 +104,14 @@ async def main():
     async with aiohttp.ClientSession() as session:
         async def bound_process(file_path):
             async with semaphore:
-                return await process_file(session, file_path, output_dir, args.api_url, args.api_key, args.query)
+                return await process_file(
+                    session,
+                    file_path,
+                    output_dir,
+                    args.api_url,
+                    args.api_key,
+                )
+
         
         tasks = [bound_process(pdf) for pdf in pdf_files]
         results = await asyncio.gather(*tasks)
