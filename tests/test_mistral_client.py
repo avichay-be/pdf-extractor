@@ -53,6 +53,27 @@ class TestMistralDocumentClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.model, custom_model)
         self.assertEqual(client.timeout, custom_timeout)
 
+    def test_ocr_response_repairs_hebrew_nun_artifact(self):
+        """Test Mistral response parsing repairs Hebrew nun OCR artifacts."""
+        response = MistralOCRResponse(
+            model="mistral-document-ai-2505",
+            pages=[
+                Page(
+                    index=0,
+                    markdown="דוח רואי חשבון המבקרים לבעלי המðיות",
+                    dimensions=Dimensions(dpi=72, height=1000, width=800),
+                )
+            ],
+            usage_info=UsageInfo(
+                pages_processed=1,
+                doc_size_bytes=100,
+                pages_processed_annotation=0,
+            ),
+        )
+
+        self.assertIn("המניות", response.pages[0].markdown)
+        self.assertNotIn("ð", response.content)
+
     def test_encode_pdf_to_base64(self):
         """Test PDF to base64 encoding."""
         # Create a temporary PDF-like file
@@ -108,7 +129,7 @@ class TestMistralDocumentClient(unittest.IsolatedAsyncioTestCase):
             }
 
             mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
+            mock_client.request.return_value = mock_response
             mock_client.__aenter__.return_value = mock_client
             mock_client.__aexit__.return_value = None
             mock_client_class.return_value = mock_client
@@ -120,9 +141,10 @@ class TestMistralDocumentClient(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Content here.", result)
 
             # Verify API was called
-            mock_client.post.assert_called_once()
-            call_args = mock_client.post.call_args
-            self.assertEqual(call_args[0][0], self.client.api_url)
+            mock_client.request.assert_called_once()
+            call_args = mock_client.request.call_args
+            self.assertEqual(call_args[0][0], "POST")
+            self.assertEqual(call_args[0][1], self.client.api_url)
 
         finally:
             Path(tmp_path).unlink(missing_ok=True)
@@ -149,7 +171,7 @@ class TestMistralDocumentClient(unittest.IsolatedAsyncioTestCase):
             mock_response.text = '{"error": {"message": "Invalid document format"}}'
 
             mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
+            mock_client.request.return_value = mock_response
             mock_client.__aenter__.return_value = mock_client
             mock_client.__aexit__.return_value = None
             mock_client_class.return_value = mock_client
@@ -198,7 +220,7 @@ class TestMistralDocumentClient(unittest.IsolatedAsyncioTestCase):
             }
 
             mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
+            mock_client.request.return_value = mock_response
             mock_client.__aenter__.return_value = mock_client
             mock_client.__aexit__.return_value = None
             mock_client_class.return_value = mock_client

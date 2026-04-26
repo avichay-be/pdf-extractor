@@ -15,8 +15,33 @@ import fitz  # PyMuPDF
 from google import genai
 from google.genai import types
 from src.core.config import settings
+from src.core.logging_utils import log_event
+from src.core.utils import repair_hebrew_ocr_text
 
 logger = logging.getLogger(__name__)
+
+
+def extract_gemini_text_response(response) -> str:
+    """
+    Extract text parts without using response.text.
+
+    The SDK emits warnings when response.text skips non-text parts such as
+    thought_signature. For extraction we only need text parts.
+    """
+    candidates = getattr(response, "candidates", None)
+    if isinstance(candidates, (list, tuple)):
+        text_parts = []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", None) or []
+            for part in parts:
+                text = getattr(part, "text", None)
+                if text:
+                    text_parts.append(text)
+        if text_parts:
+            return "".join(text_parts)
+
+    return getattr(response, "text", "") or ""
 
 
 class GeminiDocumentClient:
@@ -47,7 +72,12 @@ class GeminiDocumentClient:
         # Initialize Gemini client with API key
         self.client = genai.Client(api_key=self.api_key)
 
-        logger.info(f"Initialized Gemini client with model: {self.model_name}")
+        log_event(
+            logger,
+            logging.INFO,
+            "gemini_client_initialized",
+            model=self.model_name,
+        )
 
     def _extract_single_page_pdf(self, pdf_bytes: bytes, page_number: int) -> bytes:
         """
@@ -111,7 +141,13 @@ class GeminiDocumentClient:
             Exception: If extraction fails
         """
         try:
-            logger.info(f"Extracting page {page_number} with Gemini")
+            log_event(
+                logger,
+                logging.DEBUG,
+                "gemini_page_extraction_started",
+                page_number=page_number + 1,
+                model=self.model_name,
+            )
 
             # Extract single page as PDF
             logger.debug(f"Extracting page {page_number} from PDF...")
@@ -140,13 +176,27 @@ class GeminiDocumentClient:
             logger.debug("Sending request to Gemini...")
             response = self.client.models.generate_content(
                 model=self.model_name,
-                contents=contents
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                        disable=True,
+                    ),
+                ),
             )
 
             # Extract the text from response
-            content = response.text.strip()
+            content = repair_hebrew_ocr_text(
+                extract_gemini_text_response(response).strip()
+            )
 
-            logger.info(f"Successfully extracted page {page_number} ({len(content)} chars)")
+            log_event(
+                logger,
+                logging.DEBUG,
+                "gemini_page_extraction_completed",
+                page_number=page_number + 1,
+                model=self.model_name,
+                content_chars=len(content),
+            )
 
             return content
 

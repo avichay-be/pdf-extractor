@@ -44,7 +44,7 @@ def print_comparison(title: str, text1: str, text2: str, service: ValidationServ
 
 def main():
     """Run similarity comparison demonstrations."""
-    service = ValidationService(openai_client=None)
+    service = ValidationService()
 
     print("\n" + "="*80)
     print("ALPHANUMERIC-ONLY SIMILARITY DEMONSTRATION")

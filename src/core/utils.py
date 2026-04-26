@@ -1,6 +1,7 @@
 import base64
 import asyncio
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple
 
@@ -8,28 +9,52 @@ from src.core.constants import MARKDOWN_SECTION_SEPARATOR, MARKDOWN_PAGE_HEADER_
 
 logger = logging.getLogger(__name__)
 
-def filter_outlines_by_query(outline_info: list, query: str) -> list:
+HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF]")
+HEBREW_OCR_NUN_RE = re.compile(
+    r"(?<=[\u0590-\u05FF])[\u00F0\u00D0]|[\u00F0\u00D0](?=[\u0590-\u05FF])"
+)
+SPLIT_HEBREW_FINAL_LETTER_RE = re.compile(
+    r"(?<=[\u0590-\u05FF])\s+([\u05DA\u05DD\u05DF\u05E3\u05E5])"
+    r"(?=\s|$|[.,;:!?)\]\}\-])"
+)
+
+
+def repair_hebrew_ocr_text(text: str) -> str:
     """
-    Filter outline sections by query string (case-insensitive partial match).
+    Repair common Hebrew OCR artifacts without changing text direction.
 
-    Args:
-        outline_info: List of outline metadata dicts
-        query: Search query string
-
-    Returns:
-        Filtered list of outline metadata, or original list if no matches found
+    Mistral/Gemini OCR can emit Latin eth (U+00F0) where the Hebrew letter
+    nun is expected, for example ``המðיות`` instead of ``המניות``. Limit the
+    replacement to Hebrew context so ordinary Latin text is preserved.
     """
-    if not outline_info or not query:
-        return outline_info
+    if not text or not isinstance(text, str):
+        return text
 
-    query_lower = query.lower()
-    filtered = [
-        outline for outline in outline_info
-        if query_lower in outline['title'].lower()
-    ]
+    if "\u00F0" not in text and "\u00D0" not in text and not HEBREW_CHAR_RE.search(text):
+        return text
 
-    # If no matches found, return all outlines (fallback)
-    return filtered if filtered else outline_info
+    repaired = HEBREW_OCR_NUN_RE.sub("\u05E0", text)
+    return SPLIT_HEBREW_FINAL_LETTER_RE.sub(r"\1", repaired)
+
+
+def normalize_hebrew_text(text: str) -> str:
+    """
+    Normalize Hebrew strings from visual order to logical reading order.
+
+    pdfplumber commonly returns Hebrew in visual RTL order. Converting with
+    `bidi.get_display` restores logical text order for markdown/API output.
+    """
+    text = repair_hebrew_ocr_text(text)
+
+    if not text or not isinstance(text, str) or not HEBREW_CHAR_RE.search(text):
+        return text
+
+    try:
+        from bidi import get_display
+    except Exception:
+        return text
+
+    return get_display(text)
 
 
 def _encode_single_chunk(chunk_path: str) -> Tuple[str, str]:
@@ -91,10 +116,8 @@ def encode_pdf_to_base64(pdf_path: str) -> str:
     Encode PDF file to base64 string.
 
     This is a shared utility to eliminate duplication across multiple clients.
-    Previously duplicated in:
-    - mistral_client.py
-    - azure_di/client.py
-    - azure_document_intelligence_client.py
+    Previously duplicated in multiple OCR clients before the runtime was
+    collapsed to the retained Mistral-based path.
 
     Args:
         pdf_path: Path to PDF file
