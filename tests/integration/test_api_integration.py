@@ -58,15 +58,33 @@ class SyncASGIClient:
 def api_client():
     """Create sync HTTP client for API calls."""
     from src.core.config import settings
+    previous_api_key = settings.API_KEY
+    previous_require_api_key = settings.REQUIRE_API_KEY
     settings.API_KEY = "test-key"
     settings.REQUIRE_API_KEY = True
-    yield SyncASGIClient(app, headers={"X-API-Key": "test-key"})
+    yield SyncASGIClient(app, headers={"Authorization": "Bearer test-key"})
+    settings.API_KEY = previous_api_key
+    settings.REQUIRE_API_KEY = previous_require_api_key
 
 
 @pytest.fixture(scope="module")
 def async_api_client():
     """Create async HTTP client for API calls."""
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=TIMEOUT)
+    from src.core.config import settings
+    previous_api_key = settings.API_KEY
+    previous_require_api_key = settings.REQUIRE_API_KEY
+    settings.API_KEY = "test-key"
+    settings.REQUIRE_API_KEY = True
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        timeout=TIMEOUT,
+        headers={"Authorization": "Bearer test-key"},
+    )
+    yield client
+    asyncio.run(client.aclose())
+    settings.API_KEY = previous_api_key
+    settings.REQUIRE_API_KEY = previous_require_api_key
 
 
 @pytest.fixture(scope="module", autouse=True)

@@ -1,5 +1,5 @@
 # Production-ready multi-stage Dockerfile with security hardening
-FROM python:3.10-slim as builder
+FROM python:3.10-slim AS builder
 
 # Set working directory
 WORKDIR /app

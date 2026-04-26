@@ -90,6 +90,10 @@ class MistralDocumentClient:
             return get_async_client(timeout=self.timeout)
         return self._client
 
+    def _encode_pdf_to_base64(self, pdf_path: str) -> str:
+        """Backward-compatible wrapper for older callers/tests."""
+        return encode_pdf_to_base64(pdf_path)
+
     async def _enforce_rate_limit(self):
         """
         Enforce rate limiting by waiting if necessary.

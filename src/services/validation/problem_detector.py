@@ -21,6 +21,7 @@ import logging
 from typing import List, Dict, Optional
 from collections import Counter
 from src.core.config import settings
+from src.core.utils import repair_hebrew_ocr_text
 
 logger = logging.getLogger(__name__)
 
@@ -416,6 +417,8 @@ class ProblemDetector:
         Returns:
             Dictionary mapping problem name to detection result (only enabled problems)
         """
+        markdown_content = repair_hebrew_ocr_text(markdown_content)
+
         # Determine which problems to check
         if enabled_problems is None:
             # Get from settings (default behavior)

@@ -10,6 +10,31 @@ from src.core.constants import MARKDOWN_SECTION_SEPARATOR, MARKDOWN_PAGE_HEADER_
 logger = logging.getLogger(__name__)
 
 HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF]")
+HEBREW_OCR_NUN_RE = re.compile(
+    r"(?<=[\u0590-\u05FF])[\u00F0\u00D0]|[\u00F0\u00D0](?=[\u0590-\u05FF])"
+)
+SPLIT_HEBREW_FINAL_LETTER_RE = re.compile(
+    r"(?<=[\u0590-\u05FF])\s+([\u05DA\u05DD\u05DF\u05E3\u05E5])"
+    r"(?=\s|$|[.,;:!?)\]\}\-])"
+)
+
+
+def repair_hebrew_ocr_text(text: str) -> str:
+    """
+    Repair common Hebrew OCR artifacts without changing text direction.
+
+    Mistral/Gemini OCR can emit Latin eth (U+00F0) where the Hebrew letter
+    nun is expected, for example ``המðיות`` instead of ``המניות``. Limit the
+    replacement to Hebrew context so ordinary Latin text is preserved.
+    """
+    if not text or not isinstance(text, str):
+        return text
+
+    if "\u00F0" not in text and "\u00D0" not in text and not HEBREW_CHAR_RE.search(text):
+        return text
+
+    repaired = HEBREW_OCR_NUN_RE.sub("\u05E0", text)
+    return SPLIT_HEBREW_FINAL_LETTER_RE.sub(r"\1", repaired)
 
 
 def normalize_hebrew_text(text: str) -> str:
@@ -19,6 +44,8 @@ def normalize_hebrew_text(text: str) -> str:
     pdfplumber commonly returns Hebrew in visual RTL order. Converting with
     `bidi.get_display` restores logical text order for markdown/API output.
     """
+    text = repair_hebrew_ocr_text(text)
+
     if not text or not isinstance(text, str) or not HEBREW_CHAR_RE.search(text):
         return text
 

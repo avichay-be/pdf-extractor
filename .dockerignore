@@ -16,6 +16,8 @@ coverage.xml
 *.log
 .git
 .gitignore
+.claude
+.agents
 .mypy_cache
 .pytest_cache
 .venv
@@ -23,5 +25,6 @@ venv/
 tests/
 test_pdfs/
 integration_output/
+output/
 .env
 .DS_Store

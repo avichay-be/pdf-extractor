@@ -151,6 +151,27 @@ class TestSmartValidationService:
         assert validated[0].content == result.content
         assert validated[0].source == "mistral"
 
+    @pytest.mark.asyncio
+    async def test_pdfplumber_single_source_does_not_call_gemini_by_default(self, monkeypatch):
+        monkeypatch.setattr(
+            settings,
+            "SMART_EXTRACTION_GEMINI_FALLBACK_FOR_PDFPLUMBER",
+            False,
+        )
+        gemini_client = MagicMock()
+        validator = SmartValidationService(gemini_client=gemini_client)
+        result = PageExtractionResult(
+            page_number=0,
+            content="| | |\n| | |\n| | |\n| | |\n| | |",
+            source="pdfplumber",
+            strategy="text_extraction",
+        )
+
+        validated = await validator.validate_results([result], pdf_bytes=b"fake")
+
+        assert validated[0].source == "pdfplumber"
+        gemini_client.extract_page_content.assert_not_called()
+
 
 class TestGeminiPolisher:
     def test_combine_results_uses_page_ranges(self):
@@ -244,7 +265,7 @@ class TestGeminiPolisher:
     def test_polish_uses_configured_model(self):
         original_model = settings.SMART_EXTRACTION_POLISH_MODEL
         try:
-            settings.SMART_EXTRACTION_POLISH_MODEL = "gemini-3-1-flash-lite-preview"
+            settings.SMART_EXTRACTION_POLISH_MODEL = "gemini-custom-polish"
             mock_models = MagicMock()
             mock_models.generate_content.return_value = MagicMock(text="Polished")
             mock_gemini_client = MagicMock()
@@ -261,9 +282,25 @@ class TestGeminiPolisher:
 
             assert result == "Polished"
             mock_models.generate_content.assert_called_once()
-            assert mock_models.generate_content.call_args.kwargs["model"] == "gemini-3-1-flash-lite-preview"
+            call_kwargs = mock_models.generate_content.call_args.kwargs
+            assert call_kwargs["model"] == "gemini-custom-polish"
+            assert call_kwargs["config"].automatic_function_calling.disable is True
         finally:
             settings.SMART_EXTRACTION_POLISH_MODEL = original_model
+
+    def test_polish_deprecated_model_falls_back_to_gemini_model(self):
+        original_polish_model = settings.SMART_EXTRACTION_POLISH_MODEL
+        original_gemini_model = settings.GEMINI_MODEL
+        try:
+            settings.SMART_EXTRACTION_POLISH_MODEL = "gemini-3-1-flash-lite-preview"
+            settings.GEMINI_MODEL = "gemini-2.5-flash"
+
+            polisher = GeminiPolisher(gemini_client=MagicMock())
+
+            assert polisher._model_name == "gemini-2.5-flash"
+        finally:
+            settings.SMART_EXTRACTION_POLISH_MODEL = original_polish_model
+            settings.GEMINI_MODEL = original_gemini_model
 
 
 class TestPageAwareExtractionService:

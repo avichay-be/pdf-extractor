@@ -9,6 +9,20 @@ from src.core.logging_utils import log_event
 
 logger = logging.getLogger(__name__)
 
+
+def _public_validation_errors(exc: RequestValidationError) -> list[dict]:
+    """Return validation errors safe for JSON responses and logs."""
+    public_errors = []
+    for error in exc.errors():
+        public_error = {
+            key: value
+            for key, value in error.items()
+            if key not in {"input", "ctx"}
+        }
+        public_errors.append(public_error)
+    return public_errors
+
+
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """
     Custom handler for HTTP exceptions to ensure consistent JSON response.
@@ -32,8 +46,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """
     Custom handler for validation errors.
     """
+    errors = _public_validation_errors(exc)
     error_fields = []
-    for error in exc.errors():
+    for error in errors:
         location = error.get("loc", ())
         if len(location) > 1:
             error_fields.append(".".join(str(part) for part in location[1:]))
@@ -47,10 +62,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         method=request.method,
         path=str(request.url.path),
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        error_count=len(exc.errors()),
+        error_count=len(errors),
         error_fields=error_fields[:10],
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": exc.errors(), "body": exc.body},
+        content={"detail": errors},
     )

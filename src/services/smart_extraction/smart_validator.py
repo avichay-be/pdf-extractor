@@ -10,6 +10,7 @@ import logging
 from dataclasses import replace
 from typing import Optional
 
+from src.core.config import settings
 from src.services.gemini_client import GeminiDocumentClient
 from src.services.smart_extraction.extraction_router import PageExtractionResult
 from src.services.validation.problem_detector import ProblemDetector
@@ -39,6 +40,9 @@ class SmartValidationService:
         )
         self._gemini_client = gemini_client
         self._enable_single_source_fallback = enable_single_source_fallback
+        self._fallback_for_pdfplumber = (
+            settings.SMART_EXTRACTION_GEMINI_FALLBACK_FOR_PDFPLUMBER
+        )
         self._concurrency = 4
 
     async def validate_results(
@@ -108,7 +112,7 @@ class SmartValidationService:
 
         if primary_has_problem and not alt_has_problem and alternative.strip():
             logger.info(
-                f"Page {result.page_number}: primary has problems, "
+                f"Page {result.page_number + 1}: primary has problems, "
                 f"using alternative ({result.source} -> pdfplumber)"
             )
             return replace(
@@ -130,7 +134,7 @@ class SmartValidationService:
                 # Different content - merge (take longer, supplement)
                 merged = self._merge_contents(primary, alternative)
                 logger.info(
-                    f"Page {result.page_number}: merging dual sources "
+                    f"Page {result.page_number + 1}: merging dual sources "
                     f"(similarity={similarity:.2f})"
                 )
                 return replace(
@@ -162,6 +166,13 @@ class SmartValidationService:
         if not has_problem or not self._enable_single_source_fallback:
             return result
 
+        if result.source == "pdfplumber" and not self._fallback_for_pdfplumber:
+            logger.info(
+                f"Page {result.page_number + 1}: skipping Gemini fallback for "
+                "problematic pdfplumber content"
+            )
+            return result
+
         if result.page_range != (result.page_number, result.page_number):
             return result
 
@@ -175,7 +186,7 @@ class SmartValidationService:
                 )
                 if content.strip() and not self._has_problems(content):
                     logger.info(
-                        f"Page {result.page_number}: Gemini fallback "
+                        f"Page {result.page_number + 1}: Gemini fallback "
                         f"replaced problematic {result.source} content"
                     )
                     return replace(

@@ -5,6 +5,8 @@ import re
 import logging
 from typing import List
 
+from src.core.utils import repair_hebrew_ocr_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +24,8 @@ class ContentNormalizer:
         Returns:
             Text containing only alphanumeric characters (lowercase)
         """
+        text = repair_hebrew_ocr_text(text)
+
         # Keep only alphanumeric characters (including Unicode letters and digits)
         # This works with Hebrew, Arabic, Chinese, etc.
         normalized = ''.join(char.lower() for char in text if char.isalnum())

@@ -5,7 +5,7 @@ from reportlab.platypus import SimpleDocTemplate, Table
 from unittest.mock import MagicMock
 
 import pandas as pd
-from src.core.utils import normalize_hebrew_text
+from src.core.utils import normalize_hebrew_text, repair_hebrew_ocr_text
 from src.services.page_analyzer import PageAnalysis, PageType
 from src.services.smart_extraction.extraction_router import ExtractionRouter
 
@@ -76,3 +76,26 @@ def test_normalize_hebrew_text_fixes_mixed_visual_order_text():
 
     assert isinstance(normalized, str)
     assert "ComSign / DocuSign" in normalized
+
+
+def test_repair_hebrew_ocr_text_replaces_eth_nun_artifact():
+    corrupted = "דוח רואי חשבון המבקרים לבעלי המðיות. ביקרðו את הðכסים."
+
+    repaired = repair_hebrew_ocr_text(corrupted)
+
+    assert "המניות" in repaired
+    assert "ביקרנו" in repaired
+    assert "הנכסים" in repaired
+    assert "ð" not in repaired
+
+
+def test_repair_hebrew_ocr_text_closes_split_final_letter():
+    assert repair_hebrew_ocr_text("שורץ, לרנר, דובשני ושות'\nרואי חשבו ן") == (
+        "שורץ, לרנר, דובשני ושות'\nרואי חשבון"
+    )
+
+
+def test_repair_hebrew_ocr_text_preserves_latin_eth_without_hebrew_context():
+    text = "The Icelandic letter ð should stay unchanged."
+
+    assert repair_hebrew_ocr_text(text) == text

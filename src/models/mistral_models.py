@@ -4,6 +4,8 @@ Pydantic models for Mistral Document AI OCR API requests and responses.
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field, field_validator
 
+from src.core.utils import repair_hebrew_ocr_text
+
 
 class DocumentInput(BaseModel):
     """Document input for Mistral OCR API."""
@@ -67,6 +69,12 @@ class Page(BaseModel):
     markdown: str = Field(..., description="Markdown content of the page")
     dimensions: Dimensions = Field(..., description="Page dimensions")
     images: Optional[List[Dict[str, Any]]] = Field(None, description="Images detected on the page")
+
+    @field_validator('markdown')
+    @classmethod
+    def repair_hebrew_ocr_artifacts(cls, v: str) -> str:
+        """Repair common Hebrew OCR substitutions in page markdown."""
+        return repair_hebrew_ocr_text(v)
 
 
 class UsageInfo(BaseModel):

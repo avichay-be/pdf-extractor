@@ -10,8 +10,11 @@ import logging
 from typing import Optional
 
 from src.core.config import settings
-from src.core.utils import combine_markdown_sections
-from src.services.gemini_client import GeminiDocumentClient
+from src.core.utils import combine_markdown_sections, repair_hebrew_ocr_text
+from src.services.gemini_client import (
+    GeminiDocumentClient,
+    extract_gemini_text_response,
+)
 from src.services.smart_extraction.extraction_router import PageExtractionResult
 from src.services.validation.content_normalizer import ContentNormalizer
 
@@ -19,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 # Maximum divergence in number frequency before rejecting polish
 MAX_NUMBER_DIVERGENCE = 0.05
+DEPRECATED_POLISH_MODELS = {
+    "gemini-3-1-flash-lite-preview",
+}
 
 
 class GeminiPolisher:
@@ -29,7 +35,18 @@ class GeminiPolisher:
         self._normalizer = ContentNormalizer()
         self._batch_size = settings.SMART_EXTRACTION_POLISH_BATCH_SIZE
         self._concurrency = settings.SMART_EXTRACTION_POLISH_CONCURRENCY
-        self._model_name = settings.SMART_EXTRACTION_POLISH_MODEL or settings.GEMINI_MODEL
+        self._model_name = self._select_model_name()
+
+    def _select_model_name(self) -> str:
+        """Select a supported polish model, falling back to the extraction model."""
+        configured_model = settings.SMART_EXTRACTION_POLISH_MODEL
+        if configured_model in DEPRECATED_POLISH_MODELS:
+            logger.warning(
+                f"Configured polish model {configured_model} is deprecated; "
+                f"using {settings.GEMINI_MODEL}"
+            )
+            return settings.GEMINI_MODEL
+        return configured_model or settings.GEMINI_MODEL
 
     async def polish(
         self,
@@ -196,20 +213,20 @@ class GeminiPolisher:
 
             if not polished or not polished.strip():
                 logger.warning(f"Batch {batch_idx}: empty polish result, keeping original")
-                return original_text
+                return repair_hebrew_ocr_text(original_text)
 
             # Safety check: verify numbers are preserved
             if not self._verify_number_preservation(original_text, polished):
                 logger.warning(
                     f"Batch {batch_idx}: polish changed numbers, rejecting"
                 )
-                return original_text
+                return repair_hebrew_ocr_text(original_text)
 
-            return polished
+            return repair_hebrew_ocr_text(polished)
 
         except Exception as e:
             logger.error(f"Batch {batch_idx} polish failed: {e}")
-            return original_text
+            return repair_hebrew_ocr_text(original_text)
 
     def _call_gemini_text(
         self,
@@ -234,9 +251,12 @@ class GeminiPolisher:
             config=types.GenerateContentConfig(
                 temperature=0.1,
                 max_output_tokens=8192,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True,
+                ),
             ),
         )
-        return response.text if response.text else ""
+        return extract_gemini_text_response(response)
 
     def _verify_number_preservation(self, original: str, polished: str) -> bool:
         """
@@ -276,7 +296,7 @@ class GeminiPolisher:
 
     def _render_result(self, result: PageExtractionResult) -> str:
         """Render one result with its page header."""
-        return self._build_header(result) + result.content
+        return self._build_header(result) + repair_hebrew_ocr_text(result.content)
 
     def _build_header(self, result: PageExtractionResult) -> str:
         """Build a markdown header for a single page or multi-page range."""

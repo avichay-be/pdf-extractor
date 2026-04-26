@@ -13,7 +13,7 @@ import fitz  # PyMuPDF
 
 from src.core.config import settings
 from src.core.logging_utils import build_log_extra, log_event
-from src.core.utils import normalize_hebrew_text
+from src.core.utils import normalize_hebrew_text, repair_hebrew_ocr_text
 from src.services.mistral_client import MistralDocumentClient
 from src.services.page_analyzer import PageAnalysis, PageType
 
@@ -35,6 +35,9 @@ class PageExtractionResult:
     page_range: Optional[tuple[int, int]] = None
 
     def __post_init__(self):
+        self.content = repair_hebrew_ocr_text(self.content)
+        if self.alternative_content is not None:
+            self.alternative_content = repair_hebrew_ocr_text(self.alternative_content)
         if self.page_range is None:
             self.page_range = (self.page_number, self.page_number)
 

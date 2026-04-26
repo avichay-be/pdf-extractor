@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     INCLUDE_IMAGES: bool = False  # Set to True to include image references in output
 
     # Input Guardrails
-    MAX_UPLOAD_MB: int = 25  # Max upload size for PDFs (uncompressed)
+    MAX_UPLOAD_MB: int = 60  # Max upload size for PDFs (uncompressed)
     MAX_BASE64_LENGTH: int = 40_000_000  # Max base64 characters (~30 MB decoded)
     MAX_PDF_PAGES: int = 600  # Hard cap to avoid runaway processing
 
@@ -55,10 +55,12 @@ class Settings(BaseSettings):
     SMART_EXTRACTION_AUTO_DETECT: bool = True  # Auto-detect mixed PDFs and route to smart extraction
     SMART_EXTRACTION_TEXT_THRESHOLD: int = 50  # Min chars to consider a page as having text
     SMART_EXTRACTION_MISTRAL_BATCH_SIZE: int = 10  # Max consecutive image pages per Mistral call
+    # Avoid page-by-page Gemini calls for digital text pages by default.
+    SMART_EXTRACTION_GEMINI_FALLBACK_FOR_PDFPLUMBER: bool = False
     SMART_EXTRACTION_POLISH_ENABLED: bool = True  # Enable Gemini polish pass
     SMART_EXTRACTION_POLISH_BATCH_SIZE: int = 50  # Pages per Gemini polish call
     SMART_EXTRACTION_POLISH_CONCURRENCY: int = 3  # Max parallel Gemini polish calls
-    SMART_EXTRACTION_POLISH_MODEL: str = "gemini-3-1-flash-lite-preview"
+    SMART_EXTRACTION_POLISH_MODEL: Optional[str] = None  # None = reuse GEMINI_MODEL
     SMART_EXTRACTION_POLISH_PROMPT: Optional[str] = None  # Custom polish prompt (None = use default)
     DEFAULT_SMART_EXTRACTION_POLISH_PROMPT: str = """You are a document formatting expert. Clean up extracted PDF content into well-formatted markdown optimized for LLM consumption.
 
